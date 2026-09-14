@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Runtime data — generated locally, and enrollment photos are personal data
+# that shouldn't be committed to a shared repo.
+data/*.db
+data/enrolled_photos/*
+!data/enrolled_photos/.gitkeep
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
