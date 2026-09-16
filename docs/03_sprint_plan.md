@@ -10,9 +10,9 @@ Each sprint should end with something demonstrably working, not half-finished co
 |------|-------|
 | Finalize requirements doc (`01_requirements.md`) | Both |
 | Finalize design doc (`02_design.md`) | Both |
-| Set up Python environment, install `opencv-python` and `face_recognition`, confirm webcam works | Person A |
-| Design & create SQLite schema (`students`, `attendance` tables) | Person B |
-| Implement enrollment: capture photo(s), compute encoding, save to `students` table (FR-1) | Person A + B |
+| Set up Python environment, install `opencv-python` and `face_recognition`, confirm webcam works | Bilol Arzykulov |
+| Design & create SQLite schema (`students`, `attendance` tables) | Ayub Timurov |
+| Implement enrollment: capture photo(s), compute encoding, save to `students` table (FR-1) | Bilol Arzykulov + B |
 
 **Sprint 1 Review:** Demo enrolling one student and confirming their row appears in the database.
 
@@ -21,10 +21,10 @@ Each sprint should end with something demonstrably working, not half-finished co
 
 | Task | Owner |
 |------|-------|
-| Implement real-time face detection loop (FR-2) | Person A |
-| Implement encoding comparison against all enrolled students (FR-3) | Person A |
-| Tune the match-distance threshold to balance false positives/negatives (NFR-2) | Person A |
-| Write basic unit tests for the recognition matching function | Person B |
+| Implement real-time face detection loop (FR-2) | Bilol Arzykulov |
+| Implement encoding comparison against all enrolled students (FR-3) | Bilol Arzykulov |
+| Tune the match-distance threshold to balance false positives/negatives (NFR-2) | Bilol Arzykulov |
+| Write basic unit tests for the recognition matching function | Ayub Timurov |
 
 **Sprint 2 Review:** Demo the system correctly identifying an enrolled student live on camera, and correctly
 rejecting an unenrolled person.
@@ -34,9 +34,9 @@ rejecting an unenrolled person.
 
 | Task | Owner |
 |------|-------|
-| Implement attendance logging with duplicate-prevention (FR-4, FR-5) | Person B |
-| Implement log export/print (FR-6) | Person B |
-| Wire recognition module output into the data module (integration) | Person A + B |
+| Implement attendance logging with duplicate-prevention (FR-4, FR-5) | Ayub Timurov |
+| Implement log export/print (FR-6) | Ayub Timurov |
+| Wire recognition module output into the data module (integration) | Bilol Arzykulov + B |
 | Write test plan and execute it (`04_test_plan.md`) | Both |
 | Write final capstone report, using these docs as source material | Both |
 

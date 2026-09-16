@@ -20,8 +20,8 @@
  └─────────────┘      └───────────────────┘      └────────────────────┘
 ```
 
-- The **Recognition Module** (owned by Person A) handles everything about the camera and identifying a face.
-- The **Data Module** (owned by Person B) handles everything about storing and retrieving information.
+- The **Recognition Module** (owned by Bilol Arzykulov) handles everything about the camera and identifying a face.
+- The **Data Module** (owned by Ayub Timurov) handles everything about storing and retrieving information.
 - The two modules only talk to each other through one simple handoff: "here is the `student_id` that was just
   recognized" — this lets the two people build and test their parts independently.
 
@@ -46,7 +46,7 @@ Duplicate-prevention rule (FR-5): before inserting a new attendance row, check w
 
 ## 4. Module Responsibilities
 
-**Recognition Module (Person A)**
+**Recognition Module (Bilol Arzykulov)**
 - Open the webcam and read frames continuously (OpenCV).
 - Detect face locations in each frame.
 - Compute the face encoding for each detected face.
@@ -54,7 +54,7 @@ Duplicate-prevention rule (FR-5): before inserting a new attendance row, check w
   (if any match is close enough, based on a distance threshold).
 - Pass the matched `student_id` to the Data Module.
 
-**Data Module (Person B)**
+**Data Module (Ayub Timurov)**
 - Create and manage the SQLite database and its two tables.
 - Provide a function to enroll a new student (save name + face encoding).
 - Provide a function to log attendance for a given `student_id`, applying the duplicate-prevention rule.

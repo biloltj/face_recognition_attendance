@@ -4,8 +4,8 @@ A capstone project: a webcam-based system that recognizes enrolled students' fac
 logs their attendance to a local database.
 
 ## Team
-- Person A — Recognition module
-- Person B — Data module & documentation
+- Bilol Arzykulov — Recognition module
+- Ayub Timurov — Data module & documentation
 
 ## Project Documents
 See the [`docs/`](docs) folder for the full software-engineering documentation:
