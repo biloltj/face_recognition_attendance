@@ -13,6 +13,8 @@ See the [`docs/`](docs) folder for the full software-engineering documentation:
 - [`02_design.md`](docs/02_design.md) — architecture, tech stack, database schema
 - [`03_sprint_plan.md`](docs/03_sprint_plan.md) — Agile sprint plan
 - [`04_test_plan.md`](docs/04_test_plan.md) — test plan and results
+- [`05_collaboration_workflow.md`](docs/05_collaboration_workflow.md) — git branching workflow & module integration contract
+- [`06_technical_specification.md`](docs/06_technical_specification.md) — full technical specification (for course submission)
 
 ## Folder Structure
 ```
@@ -40,7 +42,12 @@ face_recognition_attendance/
 3. Install dependencies:
    ```
    pip install -r requirements.txt
+   pip install --no-deps face_recognition face_recognition_models Click
    ```
+   (Two steps because `face_recognition` normally depends on compiling `dlib` from source on Windows,
+   which needs CMake + a C++ compiler. `requirements.txt` installs a pre-compiled `dlib-bin` instead, and
+   the second command installs `face_recognition` itself without letting it try to pull the real `dlib`
+   on top. See `docs/02_design.md` if you hit install errors.)
 4. Run the application:
    ```
    python src/main.py

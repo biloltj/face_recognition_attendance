@@ -1,3 +1,18 @@
+# NOTE (Windows): `face_recognition` depends on `dlib`, which has no pre-built wheel for recent Python
+# versions and normally requires compiling from source with CMake + a C++ compiler. We avoid that by
+# installing `dlib-bin` (a pre-compiled community build) instead of `dlib` directly, and by installing
+# `face_recognition` with --no-deps so pip doesn't try to pull the real `dlib` on top of it. See
+# docs/02_design.md for details. Install with:
+#   pip install -r requirements.txt
+#   pip install --no-deps face_recognition face_recognition_models Click
+
 opencv-python
-face_recognition
 numpy
+dlib-bin
+face_recognition_models
+Click
+Pillow
+
+# setuptools<81 is required because face_recognition_models still imports the legacy `pkg_resources`
+# module, which newer setuptools versions removed entirely.
+setuptools<81
