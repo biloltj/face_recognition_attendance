@@ -1,4 +1,4 @@
-# Technical Specification Document
+# 📄 Technical Specification Document
 
 **Project Title:** Face Recognition Attendance System
 **Course:** [Fill in: Capstone Project / Software Engineering course name]
@@ -19,7 +19,7 @@ practice: requirements specification, system design, sprint planning, and a form
 
 ---
 
-## 1. Introduction
+## 1. 🎯 Introduction
 
 ### 1.1 Background and Motivation
 Manual attendance-taking is time-consuming and vulnerable to proxy attendance (one student answering for
@@ -45,7 +45,7 @@ possible future work rather than current requirements.
 
 ---
 
-## 2. Requirements Specification
+## 2. 📋 Requirements Specification
 
 *(Full detail: [`01_requirements.md`](01_requirements.md))*
 
@@ -77,7 +77,7 @@ possible future work rather than current requirements.
 
 ---
 
-## 3. System Design
+## 3. 🏗️ System Design
 
 *(Full detail: [`02_design.md`](02_design.md))*
 
@@ -140,7 +140,7 @@ contract in [`05_collaboration_workflow.md`](05_collaboration_workflow.md).
 
 ---
 
-## 4. Development Methodology
+## 4. 🔄 Development Methodology
 
 ### 4.1 Process Model
 The project follows **Agile/Scrum**, chosen for its short feedback loops and suitability for a small team
@@ -171,7 +171,7 @@ contract are documented in [`05_collaboration_workflow.md`](05_collaboration_wor
 
 ---
 
-## 5. Testing Strategy
+## 5. 🧪 Testing Strategy
 
 *(Full detail and results log: [`04_test_plan.md`](04_test_plan.md))*
 
@@ -187,7 +187,7 @@ students in sequence, and degraded lighting conditions.
 
 ---
 
-## 6. Project Timeline
+## 6. 🗓️ Project Timeline
 
 | Week | Milestone |
 |------|-----------|
@@ -197,7 +197,7 @@ students in sequence, and degraded lighting conditions.
 
 ---
 
-## 7. Conclusion and Expected Outcomes
+## 7. 🏁 Conclusion and Expected Outcomes
 
 By the end of the project, the team expects to deliver a working desktop application that automates
 attendance-taking via face recognition, backed by a complete set of software engineering artifacts

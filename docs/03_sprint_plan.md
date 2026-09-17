@@ -1,9 +1,9 @@
-# Agile Sprint Plan
+# 🗓️ Agile Sprint Plan
 
 We are using **Scrum**, with 3 sprints of about 1 week each, given a tight overall timeline.
 Each sprint should end with something demonstrably working, not half-finished code.
 
-## Sprint 1 — Foundations & Enrollment
+## Sprint 1 — 🌱 Foundations & Enrollment
 **Goal:** Requirements/design docs finalized; a student can be enrolled and stored.
 
 | Task | Owner |
@@ -14,9 +14,9 @@ Each sprint should end with something demonstrably working, not half-finished co
 | Design & create SQLite schema (`students`, `attendance` tables) | Ayub Timurov |
 | Implement enrollment: capture photo(s), compute encoding, save to `students` table (FR-1) | Bilol Arzykulov + B |
 
-**Sprint 1 Review:** Demo enrolling one student and confirming their row appears in the database.
+🎬 **Sprint 1 Review:** Demo enrolling one student and confirming their row appears in the database.
 
-## Sprint 2 — Detection & Recognition
+## Sprint 2 — 🔍 Detection & Recognition
 **Goal:** Live webcam feed can detect and recognize enrolled students in real time.
 
 | Task | Owner |
@@ -26,10 +26,10 @@ Each sprint should end with something demonstrably working, not half-finished co
 | Tune the match-distance threshold to balance false positives/negatives (NFR-2) | Bilol Arzykulov |
 | Write basic unit tests for the recognition matching function | Ayub Timurov |
 
-**Sprint 2 Review:** Demo the system correctly identifying an enrolled student live on camera, and correctly
+🎬 **Sprint 2 Review:** Demo the system correctly identifying an enrolled student live on camera, and correctly
 rejecting an unenrolled person.
 
-## Sprint 3 — Attendance Logging, Testing & Report
+## Sprint 3 — 📊 Attendance Logging, Testing & Report
 **Goal:** Full flow works end-to-end; project is tested and documented for submission.
 
 | Task | Owner |
@@ -40,9 +40,9 @@ rejecting an unenrolled person.
 | Write test plan and execute it (`04_test_plan.md`) | Both |
 | Write final capstone report, using these docs as source material | Both |
 
-**Sprint 3 Review:** Demo the full flow — enroll, recognize live, see attendance logged and exported.
+🎬 **Sprint 3 Review:** Demo the full flow — enroll, recognize live, see attendance logged and exported.
 
-## Retrospective template (fill in after each sprint)
-- What went well this sprint?
-- What was harder than expected?
-- What will we change for the next sprint?
+## 🔄 Retrospective template (fill in after each sprint)
+- 👍 What went well this sprint?
+- 🧗 What was harder than expected?
+- 🔧 What will we change for the next sprint?
