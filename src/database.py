@@ -6,6 +6,7 @@
 #   save_student(name, encoding) -> int
 #   get_all_students() -> list[tuple[int, str, bytes]]
 #   log_attendance(student_id) -> bool
+#   get_attendance_log() -> list[tuple[str, str]]
 #
 # Schema (see docs/06_technical_specification.md, section 3.3):
 #   students(student_id PK, name, face_encoding BLOB)
@@ -95,6 +96,22 @@ def log_attendance(student_id: int) -> bool:
             (student_id, now.isoformat()),
         )
         return True
+
+
+def get_attendance_log() -> list[tuple[str, str]]:
+    """Return the full attendance log as (student_name, timestamp) rows, most recent first — for
+    FR-6 (view/export the attendance log).
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT students.name, attendance.timestamp
+            FROM attendance
+            JOIN students ON students.student_id = attendance.student_id
+            ORDER BY attendance.timestamp DESC
+            """
+        )
+        return cursor.fetchall()
 
 
 if __name__ == "__main__":
