@@ -9,6 +9,7 @@ env/
 # Runtime data — generated locally, and enrollment photos are personal data
 # that shouldn't be committed to a shared repo.
 data/*.db
+data/*.csv
 data/enrolled_photos/*
 !data/enrolled_photos/.gitkeep
 

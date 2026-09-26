@@ -21,7 +21,7 @@ from pathlib import Path
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "attendance.db"
 
 # FR-5: don't log the same student twice within this many minutes of their last entry.
-DUPLICATE_WINDOW_MINUTES = 5
+DUPLICATE_WINDOW_MINUTES = 10
 
 
 def _get_connection() -> sqlite3.Connection:

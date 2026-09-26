@@ -51,76 +51,166 @@ class App(tk.Tk):
         self._enroll_photo = None
         self._enroll_current_frame = None  # latest preview frame, captured on "Capture & Enroll"
 
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True)
+        # The separate recognition window, while it's open (see _on_start_click / _on_stop_click).
+        self._recognition_window = None
 
-        self._build_enroll_tab(notebook)
-        self._build_attendance_tab(notebook)
-        self._build_log_tab(notebook)
+        self._notebook = ttk.Notebook(self)
+        self._notebook.pack(fill="both", expand=True)
+
+        self._build_enroll_tab(self._notebook)
+        self._build_attendance_tab(self._notebook)
+        self._build_log_tab(self._notebook)
 
     # ------------------------------------------------------------------ Enroll tab
     def _build_enroll_tab(self, notebook: ttk.Notebook) -> None:
-        tab = ttk.Frame(notebook, padding=20)
+        tab = ttk.Frame(notebook, padding=10)
         notebook.add(tab, text="Enroll Student")
 
-        ttk.Label(tab, text="Student name:").grid(row=0, column=0, sticky="w")
-        self._name_entry = ttk.Entry(tab, width=30)
-        self._name_entry.grid(row=0, column=1, padx=10)
+        form = ttk.Frame(tab)
+        form.pack(fill="x")
+        ttk.Label(form, text="Student name:").pack(side="left")
+        self._name_entry = ttk.Entry(form, width=30)
+        self._name_entry.pack(side="left", padx=10)
+        # Pressing Enter in the name field captures too, so a queue of students can be enrolled
+        # without reaching for the mouse each time.
+        self._name_entry.bind("<Return>", lambda _event: self._on_capture_click())
 
-        self._enroll_button = ttk.Button(tab, text="Capture && Enroll", command=self._on_enroll_click)
-        self._enroll_button.grid(row=0, column=2)
+        buttons = ttk.Frame(tab)
+        buttons.pack(fill="x", pady=(5, 0))
+        self._enroll_start_button = ttk.Button(buttons, text="Start Camera", command=self._on_enroll_start_click)
+        self._enroll_start_button.pack(side="left")
+        self._enroll_stop_button = ttk.Button(
+            buttons, text="Stop Camera", command=self._on_enroll_stop_click, state="disabled"
+        )
+        self._enroll_stop_button.pack(side="left", padx=5)
+        self._capture_button = ttk.Button(
+            buttons, text="Capture && Enroll", command=self._on_capture_click, state="disabled"
+        )
+        self._capture_button.pack(side="left", padx=5)
 
-        self._enroll_status = ttk.Label(tab, text="Look at the webcam and click 'Capture & Enroll'.")
-        self._enroll_status.grid(row=1, column=0, columnspan=3, pady=15, sticky="w")
+        self._enroll_status = ttk.Label(tab, text="Click 'Start Camera', then capture each student in turn.")
+        self._enroll_status.pack(fill="x", pady=10, anchor="w")
 
-    def _on_enroll_click(self) -> None:
+        self._enroll_video_label = ttk.Label(tab, text="Camera preview appears here.", anchor="center")
+        self._enroll_video_label.pack(fill="both", expand=True)
+
+    def _on_enroll_start_click(self) -> None:
+        if self._frame_source is not None:
+            messagebox.showerror("Camera busy", "Stop 'Take Attendance' first — only one tab can use the webcam.")
+            return
+
+        self._enroll_frame_source = recognition.frames_from_webcam(
+            width=main.CAPTURE_WIDTH, height=main.CAPTURE_HEIGHT
+        )
+        self._enroll_start_button.state(["disabled"])
+        self._enroll_stop_button.state(["!disabled"])
+        self._capture_button.state(["!disabled"])
+        self._update_enroll_frame()
+
+    def _update_enroll_frame(self) -> None:
+        frame = next(self._enroll_frame_source, None)
+        if frame is None:
+            messagebox.showerror("Webcam error", "Could not read from the webcam.")
+            self._on_enroll_stop_click()
+            return
+
+        self._enroll_current_frame = frame
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self._enroll_photo = ImageTk.PhotoImage(image=Image.fromarray(rgb_frame))
+        self._enroll_video_label.config(image=self._enroll_photo, text="")
+
+        self._enroll_after_id = self.after(FRAME_INTERVAL_MS, self._update_enroll_frame)
+
+    def _on_enroll_stop_click(self) -> None:
+        if self._enroll_after_id is not None:
+            self.after_cancel(self._enroll_after_id)
+            self._enroll_after_id = None
+        if self._enroll_frame_source is not None:
+            self._enroll_frame_source.close()
+            self._enroll_frame_source = None
+        self._enroll_current_frame = None
+
+        self._enroll_start_button.state(["!disabled"])
+        self._enroll_stop_button.state(["disabled"])
+        self._capture_button.state(["disabled"])
+        self._enroll_video_label.config(image="", text="Camera preview appears here.")
+
+    def _on_capture_click(self) -> None:
         name = self._name_entry.get().strip()
         if not name:
             messagebox.showerror("Missing name", "Please type the student's name first.")
             return
+        if self._enroll_current_frame is None:
+            messagebox.showerror("Camera not started", "Click 'Start Camera' first.")
+            return
 
-        self._enroll_button.state(["disabled"])
-        self._enroll_status.config(text=f"Capturing '{name}'... look at the webcam.")
+        frame = self._enroll_current_frame.copy()
+        self._capture_button.state(["disabled"])
+        self._enroll_status.config(text=f"Capturing '{name}'...")
 
-        # enroll_student() blocks for a second or more (it retries against the webcam if no face is
-        # found yet), so it runs on a background thread to keep the window responsive. Tkinter
-        # widgets may only be touched from the main thread, so the background thread hands its
-        # result back via self.after(0, ...) instead of updating the labels itself.
+        # get_face_encoding() takes a moment (it's the same dlib computation used everywhere else),
+        # so it runs on a background thread to keep the live preview smooth. The camera itself stays
+        # open the whole time — that's what makes capturing the next student immediate instead of
+        # paying camera-reopen cost per person.
         def worker() -> None:
-            result = enrollment.enroll_student(name)
+            result = enrollment.enroll_from_frame(name, frame)
             self.after(0, lambda: self._on_enroll_done(name, result))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_enroll_done(self, name: str, result: enrollment.EnrollmentResult) -> None:
-        self._enroll_button.state(["!disabled"])
+        # Re-enable capture only if the camera is still running (operator might have stopped it
+        # while a capture was in flight).
+        if self._enroll_frame_source is not None:
+            self._capture_button.state(["!disabled"])
         if result.student_id is None:
             self._enroll_status.config(text=result.error or "Enrollment failed.")
         else:
-            self._enroll_status.config(text=f"Enrolled '{name}' (student_id={result.student_id}).")
+            self._enroll_status.config(text=f"Enrolled '{name}' (student_id={result.student_id}). Next student?")
             self._name_entry.delete(0, "end")
+            self._name_entry.focus_set()
 
     # ------------------------------------------------------------- Take Attendance tab
     def _build_attendance_tab(self, notebook: ttk.Notebook) -> None:
-        tab = ttk.Frame(notebook, padding=10)
+        tab = ttk.Frame(notebook, padding=20)
         notebook.add(tab, text="Take Attendance")
 
-        buttons = ttk.Frame(tab)
-        buttons.pack(fill="x")
-        self._start_button = ttk.Button(buttons, text="Start", command=self._on_start_click)
-        self._start_button.pack(side="left")
-        self._stop_button = ttk.Button(buttons, text="Stop", command=self._on_stop_click, state="disabled")
-        self._stop_button.pack(side="left", padx=5)
+        self._start_button = ttk.Button(tab, text="Start", command=self._on_start_click)
+        self._start_button.pack(anchor="w")
 
-        self._video_label = ttk.Label(tab, text="Click 'Start' to begin recognizing faces.", anchor="center")
-        self._video_label.pack(fill="both", expand=True, pady=10)
+        ttk.Label(
+            tab,
+            text="Recognition opens in its own window, and this window hides while it runs.\n"
+            "Click 'Stop' there (or close that window) to come back to this one.",
+        ).pack(anchor="w", pady=15)
 
     def _on_start_click(self) -> None:
+        if self._enroll_frame_source is not None:
+            messagebox.showerror("Camera busy", "Stop the camera on 'Enroll Student' first — only one tab can use the webcam.")
+            return
+
         students = database.get_all_students()
         self._frame_source = recognition.frames_from_webcam(width=main.CAPTURE_WIDTH, height=main.CAPTURE_HEIGHT)
         self._worker = main.RecognitionWorker(students)
         self._start_button.state(["disabled"])
-        self._stop_button.state(["!disabled"])
+
+        # Open a separate window for the live feed and hide the main (tabbed) window behind it —
+        # per how the user wants this to look, rather than the tabs staying visible alongside it.
+        self._recognition_window = tk.Toplevel(self)
+        self._recognition_window.title("Take Attendance")
+        self._recognition_window.protocol("WM_DELETE_WINDOW", self._on_stop_click)
+        self._recognition_window.bind("<Escape>", lambda _event: self._on_stop_click())
+
+        bar = ttk.Frame(self._recognition_window)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="Stop", command=self._on_stop_click).pack(side="left", padx=10, pady=10)
+        ttk.Label(bar, text="Press Esc, or close this window, to stop and return.").pack(side="left")
+
+        self._video_label = ttk.Label(self._recognition_window, anchor="center")
+        self._video_label.pack(fill="both", expand=True)
+
+        self.withdraw()
         self._update_frame()
 
     def _update_frame(self) -> None:
@@ -150,9 +240,13 @@ class App(tk.Tk):
             self._frame_source.close()
             self._frame_source = None
 
+        if self._recognition_window is not None:
+            self._recognition_window.destroy()
+            self._recognition_window = None
+            self.deiconify()
+            self.lift()
+
         self._start_button.state(["!disabled"])
-        self._stop_button.state(["disabled"])
-        self._video_label.config(image="", text="Click 'Start' to begin recognizing faces.")
 
     # ------------------------------------------------------------------- Log tab
     def _build_log_tab(self, notebook: ttk.Notebook) -> None:
@@ -184,6 +278,7 @@ class App(tk.Tk):
     # ---------------------------------------------------------------------- misc
     def _on_close(self) -> None:
         self._on_stop_click()
+        self._on_enroll_stop_click()
         self.destroy()
 
 

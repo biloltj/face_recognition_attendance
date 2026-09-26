@@ -146,14 +146,24 @@ def bytes_to_encoding(encoding_bytes: bytes) -> np.ndarray:
 def match_face(
     encoding: bytes,
     known_students: list[tuple[int, str, bytes]],
-    tolerance: float = 0.6,
+    tolerance: float = 0.5,
+    min_margin: float = 0.08,
 ) -> int | None:
     """Compare a live face encoding against every enrolled student and return the closest match's
-    student_id, or None if nobody is close enough.
+    student_id, or None if nobody is close enough (or the match is too ambiguous — see below).
 
     `known_students` is the list returned by database.get_all_students(): (student_id, name, encoding_bytes).
-    `tolerance` is the max "distance" allowed to count as a match — lower is stricter. 0.6 is the
-    commonly recommended default for the face_recognition library.
+
+    `tolerance` is the max "distance" allowed to count as a match — lower is stricter. The
+    `face_recognition` library's own commonly-cited default is 0.6, but with only a small number of
+    students enrolled (a class, not a country), being stricter here matters more than the risk of an
+    occasional false "Unknown" for a genuine match taken in poor lighting.
+
+    `min_margin` guards against two different enrolled students being confused for each other: if the
+    best match and the second-best match are too close together, the encoding doesn't clearly belong
+    to one person more than the other (this is what "two students recognized as each other" looks
+    like numerically), so we return None rather than guessing. With only one student enrolled there's
+    nothing to compare against, so the margin check is skipped.
     """
     if not known_students:
         return None
@@ -164,10 +174,16 @@ def match_face(
     # face_distance gives one number per known encoding: how far it is from the live one.
     # Lower means more similar, so the closest match is the smallest distance.
     distances = face_recognition.face_distance(known_encodings, live_encoding)
-    best_index = int(np.argmin(distances))
+    sorted_indices = np.argsort(distances)
+    best_index = int(sorted_indices[0])
 
     if distances[best_index] > tolerance:
         return None
+
+    if len(distances) > 1:
+        second_best_distance = distances[sorted_indices[1]]
+        if second_best_distance - distances[best_index] < min_margin:
+            return None
 
     student_id, _, _ = known_students[best_index]
     return student_id

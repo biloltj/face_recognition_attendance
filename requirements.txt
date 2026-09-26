@@ -12,6 +12,7 @@ dlib-bin
 face_recognition_models
 Click
 Pillow
+Flask
 
 # setuptools<81 is required because face_recognition_models still imports the legacy `pkg_resources`
 # module, which newer setuptools versions removed entirely.
