@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Face Recognition Attendance</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <h1>📸 Face Recognition Attendance</h1>
+
+  <section id="enroll-section">
+    <h2>Enroll Student</h2>
+    <p class="hint">Look at the webcam, then click Enroll.</p>
+    <div class="row">
+      <input id="name-input" type="text" placeholder="Student name">
+      <button id="enroll-button">Enroll</button>
+    </div>
+    <p id="enroll-status" class="status"></p>
+  </section>
+
+  <section id="attendance-section">
+    <h2>Take Attendance</h2>
+    <p class="hint">Click the button to capture and recognize whoever is currently in front of the webcam.</p>
+    <button id="capture-button">Take Attendance</button>
+    <p id="capture-status" class="status"></p>
+  </section>
+
+  <section id="log-section">
+    <h2>Attendance Log</h2>
+    <div class="row">
+      <button id="refresh-button">Refresh</button>
+      <a id="export-link" href="/api/attendance/export.csv">Export CSV</a>
+    </div>
+    <table id="log-table">
+      <thead>
+        <tr><th>Student</th><th>Timestamp</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
