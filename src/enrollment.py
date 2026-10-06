@@ -99,7 +99,7 @@ def enroll_student(name: str) -> EnrollmentResult:
     return EnrollmentResult(None, message)
 
 
-def enroll_from_frame(name: str, frame) -> EnrollmentResult:
+def enroll_from_frame(name: str, frame, cnn_fallback: bool = False) -> EnrollmentResult:
     """Like enroll_student(), but works from a frame the caller already captured (e.g. the latest
     frame off a live preview) instead of opening the webcam itself.
 
@@ -107,6 +107,9 @@ def enroll_from_frame(name: str, frame) -> EnrollmentResult:
     once and keeps it open across the whole enrollment session, showing a live preview so the
     operator can see the framing is good *before* capturing — no blind retries, and no per-student
     camera reopen cost.
+
+    `cnn_fallback` is passed through to recognition.get_face_encoding() — the web app turns it on for
+    uploaded photos, where waiting a few extra seconds beats rejecting a good photo.
     """
     name = name.strip()
     error = _validate_name(name)
@@ -115,7 +118,7 @@ def enroll_from_frame(name: str, frame) -> EnrollmentResult:
         return EnrollmentResult(None, error)
 
     database.init_db()
-    encoding = recognition.get_face_encoding(frame)
+    encoding = recognition.get_face_encoding(frame, cnn_fallback=cnn_fallback)
     if encoding is None:
         message = "No face detected. Make sure your face is clearly visible and try again."
         print(message)

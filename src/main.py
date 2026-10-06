@@ -38,16 +38,22 @@ def draw_detections(frame, detections: list[tuple[str, tuple[int, int, int, int]
 
 
 def process_frame(
-    frame, students: list[tuple[int, str, bytes]]
+    frame, students: list[tuple[int, str, bytes]], cnn_fallback: bool = False
 ) -> list[tuple[str, tuple[int, int, int, int]]]:
     """Look for every face in one frame and return (label, face_location) for each: the matched
     student's name, or "Unknown" if a face was found but didn't match anyone. Returns an empty
     list if no faces are found.
 
     Also logs attendance for every matched student.
+
+    `cnn_fallback` is passed through to recognition.get_all_face_encodings() — only for a single
+    uploaded photo (see webapp.py), never in the live loop.
     """
     results = []
-    for encoding, location in recognition.get_all_face_encodings(frame, resize_factor=RECOGNITION_RESIZE_FACTOR):
+    faces = recognition.get_all_face_encodings(
+        frame, resize_factor=RECOGNITION_RESIZE_FACTOR, cnn_fallback=cnn_fallback
+    )
+    for encoding, location in faces:
         student_id = recognition.match_face(encoding, students)
         if student_id is None:
             results.append(("Unknown", location))

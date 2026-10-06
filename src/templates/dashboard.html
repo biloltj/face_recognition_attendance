@@ -10,18 +10,26 @@
 
   <section id="enroll-section">
     <h2>Enroll Student</h2>
-    <p class="hint">Look at the webcam, then click Enroll.</p>
+    <p class="hint">Type the name, then either look at the webcam and click Enroll, or choose a photo of the student and click Enroll from Photo.</p>
     <div class="row">
       <input id="name-input" type="text" placeholder="Student name">
       <button id="enroll-button">Enroll</button>
+    </div>
+    <div class="row">
+      <input id="enroll-photo-input" type="file" accept="image/*">
+      <button id="enroll-photo-button">Enroll from Photo</button>
     </div>
     <p id="enroll-status" class="status"></p>
   </section>
 
   <section id="attendance-section">
     <h2>Take Attendance</h2>
-    <p class="hint">Click the button to capture and recognize whoever is currently in front of the webcam.</p>
+    <p class="hint">Click Take Attendance to recognize whoever is in front of the webcam, or upload a photo (e.g. a group photo of the class) to recognize everyone in it.</p>
     <button id="capture-button">Take Attendance</button>
+    <div class="row">
+      <input id="attendance-photo-input" type="file" accept="image/*">
+      <button id="attendance-photo-button">Recognize from Photo</button>
+    </div>
     <p id="capture-status" class="status"></p>
   </section>
 

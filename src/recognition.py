@@ -68,7 +68,9 @@ def frames_from_webcam(camera_index: int = 0, width: int | None = None, height: 
         cap.release()
 
 
-def get_face_encoding(image: np.ndarray, resize_factor: float = 1.0) -> bytes | None:
+def get_face_encoding(
+    image: np.ndarray, resize_factor: float = 1.0, cnn_fallback: bool = False
+) -> bytes | None:
     """Given an image (as returned by capture_frame_from_webcam), find the first face in it and
     return its encoding as raw bytes, ready to be stored in the database.
 
@@ -77,6 +79,11 @@ def get_face_encoding(image: np.ndarray, resize_factor: float = 1.0) -> bytes | 
     recognition loop should pass a smaller factor to stay smooth. Leave it at 1.0 (full
     resolution, the default) for enrollment, where a one-time accurate encoding matters more than
     speed.
+
+    `cnn_fallback=True` retries with the slower but more accurate "cnn" face detector if the default
+    "hog" detector finds nothing. HOG sometimes misses perfectly good faces — e.g. a tightly cropped
+    ID-style photo where the face fills most of the image. CNN can take 10+ seconds on a CPU, so this
+    is only worth it for one-off enrollment photos, never for a live recognition loop.
 
     Returns None if no face is found in the image.
     """
@@ -87,6 +94,8 @@ def get_face_encoding(image: np.ndarray, resize_factor: float = 1.0) -> bytes | 
     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
     face_locations = face_recognition.face_locations(rgb_image)
+    if not face_locations and cnn_fallback:
+        face_locations = face_recognition.face_locations(rgb_image, model="cnn")
     if not face_locations:
         return None
 
@@ -99,7 +108,7 @@ def get_face_encoding(image: np.ndarray, resize_factor: float = 1.0) -> bytes | 
 
 
 def get_all_face_encodings(
-    image: np.ndarray, resize_factor: float = 1.0
+    image: np.ndarray, resize_factor: float = 1.0, cnn_fallback: bool = False
 ) -> list[tuple[bytes, tuple[int, int, int, int]]]:
     """Like get_face_encoding, but finds and encodes every face in the image — for recognizing
     multiple students (e.g. a group, or a whole classroom) in a single frame.
@@ -113,6 +122,9 @@ def get_all_face_encodings(
     original — an encoding computed from a tiny, low-detail crop doesn't match well against a
     full-resolution enrollment photo, so shrinking before encoding (not just before detection)
     would make recognition unreliable.
+
+    `cnn_fallback` works the same as in get_face_encoding — only use it for a single uploaded
+    photo, never per-frame in a live loop.
     """
     small_image = image
     if resize_factor != 1.0:
@@ -120,6 +132,8 @@ def get_all_face_encodings(
 
     small_rgb = cv2.cvtColor(small_image, cv2.COLOR_BGR2RGB)
     small_face_locations = face_recognition.face_locations(small_rgb)
+    if not small_face_locations and cnn_fallback:
+        small_face_locations = face_recognition.face_locations(small_rgb, model="cnn")
     if not small_face_locations:
         return []
 

@@ -78,3 +78,9 @@ th, td {
   text-decoration: none;
   color: #222;
 }
+
+/* Space between stacked rows (e.g. the webcam button and the "from Photo" upload row below it). */
+.row + .row,
+button + .row {
+  margin-top: 0.5rem;
+}

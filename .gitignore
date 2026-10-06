@@ -18,3 +18,4 @@ data/enrolled_photos/*
 .idea/
 .DS_Store
 Thumbs.db
+photos
