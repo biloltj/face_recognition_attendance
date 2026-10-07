@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dii Portal - Lecturer Attendance Console</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --success: #10b981;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background-color: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 9999px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-active { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+    .badge-idle { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); border: 1px solid var(--border); }
+
+    main {
+      flex: 1;
+      padding: 2rem;
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 2rem;
+      max-width: 1600px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    @media (max-width: 1024px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .controls-panel {
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    label {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    select, input {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 1rem;
+    }
+
+    button {
+      flex: 1;
+      padding: 0.85rem 1.5rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-danger:hover { background: var(--danger-hover); }
+    .btn-export { background: #475569; color: white; flex: none; }
+    .btn-export:hover { background: #64748b; }
+
+    .video-viewport {
+      background: #020617;
+      min-height: 480px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+
+    .video-viewport img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .timer-overlay {
+      position: absolute;
+      top: 1rem;
+      left: 1rem;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(4px);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      font-size: 1.25rem;
+      font-weight: 700;
+      font-family: monospace;
+      color: var(--success);
+    }
+
+    .table-container {
+      flex: 1;
+      overflow-y: auto;
+      max-height: 520px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    th {
+      background: #1e293b;
+      padding: 0.85rem 1.25rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+    }
+
+    td {
+      padding: 1rem 1.25rem;
+      font-size: 0.9rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .status-pill {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <span>🎓</span>
+      <span>Dii Portal Attendance Platform</span>
+    </div>
+    <div id="statusBadge" class="badge badge-idle">Session Idle</div>
+  </header>
+
+  <main>
+    <!-- Left Column: Video Feed & Timer -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Live Biometric Stream</h2>
+        <span id="sessionTimer" style="font-family: monospace; font-size: 1.1rem; color: var(--success);">10:00</span>
+      </div>
+      <div class="video-viewport">
+        <img id="cameraStream" src="/stream" alt="Live Camera Feed">
+      </div>
+    </div>
+
+    <!-- Right Column: Lecturer Controls & Attendance Roster -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Lecturer Controls</h2>
+        <button id="exportBtn" class="btn-export" onclick="exportCSV()">Export CSV</button>
+      </div>
+
+      <div class="controls-panel">
+        <div class="form-group">
+          <label for="courseSelect">Select Course Slot</label>
+          <select id="courseSelect">
+            <option value="CS401">CS401 - Computer Vision & Machine Learning</option>
+            <option value="MATH201">MATH201 - Advanced Linear Algebra</option>
+          </select>
+        </div>
+
+        <div class="btn-group">
+          <button id="startBtn" class="btn-primary" onclick="startSession()">▶ Start 10-Min Session</button>
+          <button id="stopBtn" class="btn-danger" onclick="stopSession()" style="display: none;">■ End Session</button>
+        </div>
+      </div>
+
+      <div class="card-header">
+        <h2 class="card-title">Verified Attendance (<span id="recordCount">0</span>)</h2>
+        <span id="courseRosterStat" style="font-size: 0.85rem; color: var(--text-muted);">Course: CS401</span>
+      </div>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Student Name</th>
+              <th>Marked At</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="recordsBody">
+            <tr>
+              <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;">
+                No attendance recorded yet. Click "Start 10-Min Session" to begin.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let activeSessionId = null;
+
+    async function updateStatus() {
+      try {
+        const res = await fetch("/session/status");
+        const data = await res.json();
+
+        const badge = document.getElementById("statusBadge");
+        const timer = document.getElementById("sessionTimer");
+        const startBtn = document.getElementById("startBtn");
+        const stopBtn = document.getElementById("stopBtn");
+
+        if (data.is_active) {
+          activeSessionId = data.session_id;
+          badge.textContent = `Active (${data.course_id})`;
+          badge.className = "badge badge-active";
+
+          const mins = Math.floor(data.remaining_seconds / 60);
+          const secs = data.remaining_seconds % 60;
+          timer.textContent = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+
+          startBtn.style.display = "none";
+          stopBtn.style.display = "flex";
+
+          fetchRecords();
+        } else {
+          badge.textContent = "Session Idle";
+          badge.className = "badge badge-idle";
+          startBtn.style.display = "flex";
+          stopBtn.style.display = "none";
+          timer.textContent = "10:00";
+        }
+      } catch (err) {
+        console.error("Status poll error:", err);
+      }
+    }
+
+    async function fetchRecords() {
+      try {
+        const res = await fetch("/session/records");
+        const data = await res.json();
+        const tbody = document.getElementById("recordsBody");
+        document.getElementById("recordCount").textContent = data.records.length;
+
+        if (data.records.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 2rem;">Awaiting faces in camera...</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = data.records.map(r => `
+          <tr>
+            <td><strong>${r.student_code}</strong></td>
+            <td>${r.full_name}</td>
+            <td style="color: var(--text-muted); font-size: 0.85rem;">${r.marked_at}</td>
+            <td><span class="status-pill">${r.status}</span></td>
+          </tr>
+        `).join("");
+      } catch (err) {
+        console.error("Records fetch error:", err);
+      }
+    }
+
+    async function startSession() {
+      const courseId = document.getElementById("courseSelect").value;
+      const res = await fetch("/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ course_id: courseId, duration_seconds: 600 })
+      });
+      const data = await res.json();
+      activeSessionId = data.session_id;
+      updateStatus();
+    }
+
+    async function stopSession() {
+      await fetch("/session/stop", { method: "POST" });
+      updateStatus();
+    }
+
+    function exportCSV() {
+      window.location.href = activeSessionId ? `/session/export?session_id=${activeSessionId}` : "/session/export";
+    }
+
+    setInterval(updateStatus, 1500);
+    updateStatus();
+  </script>
+</body>
+</html>
