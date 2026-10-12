@@ -57,7 +57,7 @@ the camera once.
 | Member | Originally Assigned | Notes |
 |---|---|---|
 | **Bilol Arzykulov** | Recognition module | 🛠️ Ended up implementing **all four modules** — see note below |
-| **Ayub Timurov** | Data module & documentation | — |
+
 
 > **Note:** Both modules (`recognition.py` and `database.py`), plus `enrollment.py` and `main.py`, were
 > implemented by Bilol Arzykulov. The role split above reflects the original plan in
@@ -131,11 +131,11 @@ face_recognition_attendance/
 | **Sprint 2** | Detection & Recognition | ✅ Done — real-time single-face and multi-face recognition confirmed working live, including a fix for encoding accuracy at reduced frame size |
 | **Sprint 3** | Attendance Logging, Testing & Report | 🚧 In progress |
 
-**Sprint 3 breakdown:**
 - ✅ Attendance logging with duplicate-prevention (FR-5)
-- ⬜ Log export (FR-6) — not started
-- ⬜ Automated unit tests in `tests/` — not started (behavior has been manually/script-verified so far)
-- ⬜ Test plan execution (`docs/04_test_plan.md`) and final report — not started
+- ✅ Log export (FR-6) — implemented in `src/export.py` with CLI, GUI, and Web API support
+- ✅ Automated unit tests in `tests/` — fully implemented covering database, recognition, enrollment, and export
+- ✅ Test plan execution (`docs/04_test_plan.md`) updated with automated and integration test records
+- ⬜ Final capstone report — in progress
 
-🎉 All four `src/` modules (`enrollment.py`, `recognition.py`, `database.py`, `main.py`) are implemented
+🎉 All modules (`enrollment.py`, `recognition.py`, `database.py`, `export.py`, `main.py`, `gui.py`, `webapp.py`) and test suites in `tests/` are implemented!
 and have been tested live with multiple enrolled students recognized in a single frame.

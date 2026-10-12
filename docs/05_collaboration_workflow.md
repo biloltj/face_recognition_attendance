@@ -3,7 +3,7 @@
 ## 1. 👥 Roles Recap
 - **Bilol Arzykulov (Recognition + Integration):** webcam capture, face detection, face matching, and
   wiring everything together in `main.py`.
-- **Ayub Timurov (Data + Documentation):** SQLite schema, enrollment storage, attendance
+- **SQLite schema, enrollment storage, attendance**
   logging with duplicate-prevention, and keeping the `docs/` files up to date.
 
 Full detail on each module is in [`02_design.md`](02_design.md).

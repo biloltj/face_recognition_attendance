@@ -39,8 +39,7 @@ evidence for your capstone report that the system was actually verified, not jus
 | IT-2 | 2026-09-16 | ⚠️ Partial | Verified with simulated (non-live) unenrolled encodings, correctly labeled "Unknown" and not logged. Not yet re-tested with a real unenrolled person live on camera — recommend doing so before submission. |
 | IT-3 | 2026-09-17 | ✅ Pass | Live test: enrolled "Bilol" and "Hikmat", both shown to the camera together; each recognized and logged under their own correct student_id, not confused with each other. |
 | IT-4 | | ⬜ Not yet run | |
-| IT-5 | | ⬜ Not yet run | Export feature (FR-6) not implemented yet. |
+| IT-5 | 2026-10-08 | ✅ Pass | Export feature (FR-6) implemented in `src/export.py` and verified via automated test in `tests/test_export.py`. |
 
-> ℹ️ **Note:** UT-1 through UT-5 were verified by ad hoc Python scripts exercising the functions directly
-> during development, not yet turned into permanent automated test files under `tests/` — that conversion
-> is still outstanding.
+> ℹ️ **Note:** UT-1 through UT-5 and IT-5 are now implemented as permanent automated unit test suites under `tests/` (`test_database.py`, `test_recognition.py`, `test_enrollment.py`, and `test_export.py`).
+
