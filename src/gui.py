@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import cv2
 from PIL import Image, ImageTk
@@ -87,6 +87,10 @@ class App(tk.Tk):
             buttons, text="Capture && Enroll", command=self._on_capture_click, state="disabled"
         )
         self._capture_button.pack(side="left", padx=5)
+        self._photo_enroll_button = ttk.Button(
+            buttons, text="Enroll from Photo...", command=self._on_enroll_photo_file_click
+        )
+        self._photo_enroll_button.pack(side="left", padx=5)
 
         self._enroll_status = ttk.Label(tab, text="Click 'Start Camera', then capture each student in turn.")
         self._enroll_status.pack(fill="x", pady=10, anchor="w")
@@ -159,7 +163,35 @@ class App(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _on_enroll_photo_file_click(self) -> None:
+        name = self._name_entry.get().strip()
+        if not name:
+            messagebox.showerror("Missing name", "Please type the student's name first.")
+            return
+
+        file_path = filedialog.askopenfilename(
+            title="Select Student Photo",
+            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.bmp *.webp"), ("All Files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        image = cv2.imread(file_path)
+        if image is None:
+            messagebox.showerror("Invalid Image", "Could not load the selected image file.")
+            return
+
+        self._photo_enroll_button.state(["disabled"])
+        self._enroll_status.config(text=f"Enrolling '{name}' from photo... please wait.")
+
+        def worker() -> None:
+            result = enrollment.enroll_from_frame(name, image, cnn_fallback=True)
+            self.after(0, lambda: self._on_enroll_done(name, result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _on_enroll_done(self, name: str, result: enrollment.EnrollmentResult) -> None:
+        self._photo_enroll_button.state(["!disabled"])
         # Re-enable capture only if the camera is still running (operator might have stopped it
         # while a capture was in flight).
         if self._enroll_frame_source is not None:
@@ -258,8 +290,9 @@ class App(tk.Tk):
         ttk.Button(buttons, text="Refresh", command=self._refresh_log).pack(side="left")
         ttk.Button(buttons, text="Export to CSV", command=self._on_export_click).pack(side="left", padx=5)
 
-        self._log_tree = ttk.Treeview(tab, columns=("student", "timestamp"), show="headings")
+        self._log_tree = ttk.Treeview(tab, columns=("student", "session", "timestamp"), show="headings")
         self._log_tree.heading("student", text="Student")
+        self._log_tree.heading("session", text="Session")
         self._log_tree.heading("timestamp", text="Timestamp")
         self._log_tree.pack(fill="both", expand=True, pady=10)
 
@@ -267,8 +300,10 @@ class App(tk.Tk):
 
     def _refresh_log(self) -> None:
         self._log_tree.delete(*self._log_tree.get_children())
-        for name, timestamp in database.get_attendance_log():
-            self._log_tree.insert("", "end", values=(name, timestamp))
+        for row in database.get_attendance_log():
+            name, timestamp = row[0], row[1]
+            session = row[2] if len(row) > 2 else "General"
+            self._log_tree.insert("", "end", values=(name, session, timestamp))
 
     def _on_export_click(self) -> None:
         path = export.export_attendance_csv()

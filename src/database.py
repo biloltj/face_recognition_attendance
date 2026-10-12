@@ -5,32 +5,70 @@
 #   init_db() -> None
 #   save_student(name, encoding) -> int
 #   get_all_students() -> list[tuple[int, str, bytes]]
-#   log_attendance(student_id) -> bool
-#   get_attendance_log() -> list[tuple[str, str]]
+#   delete_student(student_id) -> bool
+#   log_attendance(student_id, session_name) -> bool
+#   get_attendance_log(session_name) -> list[tuple[str, str, str]]
+#   get_all_sessions() -> list[str]
 #
-# Schema (see docs/06_technical_specification.md, section 3.3):
-#   students(student_id PK, name, face_encoding BLOB)
-#   attendance(id PK, student_id FK, timestamp ISO datetime)
+# Course/session interface (plan.md, Week 1):
+#   create_course(code, name) -> int
+#   get_all_courses() -> list[tuple[int, str, str]]
+#   add_student_to_course(course_id, student_id) -> bool
+#   get_course_students(course_id) -> list[tuple[int, str, bytes]]
+#   create_classroom(name, camera_source) -> int
+#   create_session(course_id, classroom_id) -> int
+#   close_session(session_id) -> bool
+#   get_session(session_id) -> tuple | None
+#   log_session_attendance(session_id, student_id, confidence) -> bool
+#   get_session_attendance(session_id) -> list[tuple[int, str, str, float | None]]
+#
+# Schema:
+#   students(student_id PK, name, face_encoding BLOB, university_id TEXT UNIQUE)
+#   courses(course_id PK, code UNIQUE, name)
+#   course_students(course_id FK, student_id FK) PK(course_id, student_id)
+#   classrooms(classroom_id PK, name UNIQUE, camera_source)
+#   sessions(session_id PK, course_id FK, classroom_id FK, started_at, ended_at, status 'open'|'closed')
+#   attendance(id PK, student_id FK, timestamp ISO datetime, session_name TEXT,
+#              session_id FK, confidence REAL)  UNIQUE(session_id, student_id)
+#
+# The legacy session_name column is kept so the current GUI/webapp keep working until
+# recognition.py is moved over to sessions (plan.md, Week 2). New code should use session_id.
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "attendance.db"
 
-# FR-5: don't log the same student twice within this many minutes of their last entry.
+# FR-5: don't log the same student twice within this many minutes of their last entry in General mode.
 DUPLICATE_WINDOW_MINUTES = 10
 
 
-def _get_connection() -> sqlite3.Connection:
+@contextmanager
+def _get_connection() -> Generator[sqlite3.Connection, None, None]:
+    """Open a connection that commits on success, rolls back on error, and is always closed.
+    (A bare sqlite3 connection used in `with` only commits; leaving it open locks the file on Windows.)
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> list[str]:
+    return [col[1] for col in conn.execute(f"PRAGMA table_info({table})").fetchall()]
 
 
 def init_db() -> None:
-    """Create the students and attendance tables if they don't already exist."""
+    """Create all tables if they don't already exist, and migrate older databases in place."""
     with _get_connection() as conn:
         conn.execute(
             """
@@ -47,20 +85,99 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 student_id INTEGER NOT NULL,
                 timestamp TEXT NOT NULL,
+                session_name TEXT DEFAULT 'General',
                 FOREIGN KEY (student_id) REFERENCES students(student_id)
             )
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS courses (
+                course_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS course_students (
+                course_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL,
+                PRIMARY KEY (course_id, student_id),
+                FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS classrooms (
+                classroom_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                camera_source TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course_id INTEGER NOT NULL,
+                classroom_id INTEGER,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+                FOREIGN KEY (course_id) REFERENCES courses(course_id),
+                FOREIGN KEY (classroom_id) REFERENCES classrooms(classroom_id)
+            )
+            """
+        )
 
-def save_student(name: str, encoding: bytes) -> int:
-    """Enroll a new student: store their name and face encoding, return the new student_id."""
+        # Migrations for databases created by earlier versions: add new columns in place so
+        # existing students and attendance rows are kept.
+        attendance_columns = _column_names(conn, "attendance")
+        if "session_name" not in attendance_columns:
+            conn.execute("ALTER TABLE attendance ADD COLUMN session_name TEXT DEFAULT 'General'")
+        if "session_id" not in attendance_columns:
+            conn.execute("ALTER TABLE attendance ADD COLUMN session_id INTEGER REFERENCES sessions(session_id)")
+        if "confidence" not in attendance_columns:
+            conn.execute("ALTER TABLE attendance ADD COLUMN confidence REAL")
+        if "university_id" not in _column_names(conn, "students"):
+            # SQLite can't ADD COLUMN ... UNIQUE, so uniqueness comes from the index below.
+            conn.execute("ALTER TABLE students ADD COLUMN university_id TEXT")
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_students_university_id "
+            "ON students(university_id) WHERE university_id IS NOT NULL"
+        )
+        # One attendance record per student per session. Legacy rows (session_id NULL) are exempt.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_session_student "
+            "ON attendance(session_id, student_id) WHERE session_id IS NOT NULL"
+        )
+
+
+def save_student(name: str, encoding: bytes, university_id: str | None = None) -> int:
+    """Enroll a new student: store their name, face encoding and (optional) university ID from the
+    portal, return the new student_id. Raises sqlite3.IntegrityError if university_id is already used.
+    """
     with _get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO students (name, face_encoding) VALUES (?, ?)",
-            (name, encoding),
+            "INSERT INTO students (name, face_encoding, university_id) VALUES (?, ?, ?)",
+            (name, encoding, university_id),
         )
         return cursor.lastrowid
+
+
+def delete_student(student_id: int) -> bool:
+    """Remove a student, their course enrollments and their attendance history from the database."""
+    with _get_connection() as conn:
+        conn.execute("DELETE FROM attendance WHERE student_id = ?", (student_id,))
+        conn.execute("DELETE FROM course_students WHERE student_id = ?", (student_id,))
+        cursor = conn.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
+        return cursor.rowcount > 0
 
 
 def get_all_students() -> list[tuple[int, str, bytes]]:
@@ -68,62 +185,251 @@ def get_all_students() -> list[tuple[int, str, bytes]]:
     compare a live face against.
     """
     with _get_connection() as conn:
-        cursor = conn.execute("SELECT student_id, name, face_encoding FROM students")
+        cursor = conn.execute("SELECT student_id, name, face_encoding FROM students ORDER BY student_id ASC")
         return cursor.fetchall()
 
 
-def log_attendance(student_id: int) -> bool:
-    """Record attendance for student_id at the current time.
+def log_attendance(student_id: int, session_name: str = "General") -> bool:
+    """Record attendance for student_id at the current time within a session.
 
-    Applies the FR-5 duplicate rule: if this student was already logged within the last
-    DUPLICATE_WINDOW_MINUTES, skip the insert and return False. Otherwise insert a new
-    attendance row and return True.
+    Session duplicate rules:
+    - If session_name is a specific lecture/class (not 'General'), prevents logging the same student
+      more than once in that session.
+    - If session_name is 'General', applies the sliding window (DUPLICATE_WINDOW_MINUTES).
     """
+    session_name = (session_name or "General").strip()
     now = datetime.now()
     with _get_connection() as conn:
         cursor = conn.execute(
-            "SELECT timestamp FROM attendance WHERE student_id = ? ORDER BY timestamp DESC LIMIT 1",
-            (student_id,),
+            """
+            SELECT timestamp FROM attendance
+            WHERE student_id = ? AND session_name = ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (student_id, session_name),
         )
         row = cursor.fetchone()
         if row is not None:
+            # If in a specific named session, student can only be logged once
+            if session_name != "General":
+                return False
+
+            # If in General mode, check sliding duplicate window
             last_timestamp = datetime.fromisoformat(row[0])
             if now - last_timestamp < timedelta(minutes=DUPLICATE_WINDOW_MINUTES):
                 return False
 
         conn.execute(
-            "INSERT INTO attendance (student_id, timestamp) VALUES (?, ?)",
-            (student_id, now.isoformat()),
+            "INSERT INTO attendance (student_id, timestamp, session_name) VALUES (?, ?, ?)",
+            (student_id, now.isoformat(), session_name),
         )
         return True
 
 
-def get_attendance_log() -> list[tuple[str, str]]:
-    """Return the full attendance log as (student_name, timestamp) rows, most recent first — for
-    FR-6 (view/export the attendance log).
+def get_attendance_log(session_name: str | None = None) -> list[tuple[str, str, str]]:
+    """Return the attendance log as (student_name, timestamp, session_name) rows, most recent first.
+    If session_name is given, filters records to that specific session.
+    """
+    with _get_connection() as conn:
+        if session_name:
+            cursor = conn.execute(
+                """
+                SELECT students.name, attendance.timestamp, attendance.session_name
+                FROM attendance
+                JOIN students ON students.student_id = attendance.student_id
+                WHERE attendance.session_name = ?
+                ORDER BY attendance.timestamp DESC
+                """,
+                (session_name,),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                SELECT students.name, attendance.timestamp, COALESCE(attendance.session_name, 'General')
+                FROM attendance
+                JOIN students ON students.student_id = attendance.student_id
+                ORDER BY attendance.timestamp DESC
+                """
+            )
+        return cursor.fetchall()
+
+
+def get_all_sessions() -> list[str]:
+    """Return all distinct session names recorded in the database, newest first."""
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT DISTINCT session_name FROM attendance
+            WHERE session_name IS NOT NULL AND session_name != ''
+            ORDER BY timestamp DESC
+            """
+        )
+        sessions = [row[0] for row in cursor.fetchall()]
+        if "General" not in sessions:
+            sessions.append("General")
+        return sessions
+
+
+def create_course(code: str, name: str) -> int:
+    """Create a course (e.g. code 'MATH101', name 'Calculus I') and return its course_id.
+    Raises sqlite3.IntegrityError if the code already exists.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO courses (code, name) VALUES (?, ?)",
+            (code.strip(), name.strip()),
+        )
+        return cursor.lastrowid
+
+
+def get_all_courses() -> list[tuple[int, str, str]]:
+    """Return every course as (course_id, code, name), ordered by code."""
+    with _get_connection() as conn:
+        cursor = conn.execute("SELECT course_id, code, name FROM courses ORDER BY code ASC")
+        return cursor.fetchall()
+
+
+def add_student_to_course(course_id: int, student_id: int) -> bool:
+    """Enroll a student in a course. Returns False if they were already enrolled."""
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO course_students (course_id, student_id) VALUES (?, ?)",
+            (course_id, student_id),
+        )
+        return cursor.rowcount > 0
+
+
+def get_course_students(course_id: int) -> list[tuple[int, str, bytes]]:
+    """Return the course roster as (student_id, name, face_encoding), the same shape as
+    get_all_students(), so recognition can match faces against this course only.
     """
     with _get_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT students.name, attendance.timestamp
+            SELECT students.student_id, students.name, students.face_encoding
+            FROM course_students
+            JOIN students ON students.student_id = course_students.student_id
+            WHERE course_students.course_id = ?
+            ORDER BY students.student_id ASC
+            """,
+            (course_id,),
+        )
+        return cursor.fetchall()
+
+
+def create_classroom(name: str, camera_source: str | None = None) -> int:
+    """Register a classroom and the camera that covers it (a device index like '0' or a stream URL)."""
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO classrooms (name, camera_source) VALUES (?, ?)",
+            (name.strip(), camera_source),
+        )
+        return cursor.lastrowid
+
+
+def create_session(course_id: int, classroom_id: int | None = None) -> int:
+    """Open a new attendance session (one lesson of a course) starting now, return its session_id.
+
+    Raises ValueError if the classroom already has an open session, so two lessons can never
+    record into the same room at once.
+    """
+    with _get_connection() as conn:
+        if classroom_id is not None:
+            busy = conn.execute(
+                "SELECT session_id FROM sessions WHERE classroom_id = ? AND status = 'open'",
+                (classroom_id,),
+            ).fetchone()
+            if busy is not None:
+                raise ValueError(f"Classroom {classroom_id} already has open session {busy[0]}")
+
+        cursor = conn.execute(
+            "INSERT INTO sessions (course_id, classroom_id, started_at, status) VALUES (?, ?, ?, 'open')",
+            (course_id, classroom_id, datetime.now().isoformat()),
+        )
+        return cursor.lastrowid
+
+
+def close_session(session_id: int) -> bool:
+    """Close an open session and record its end time. Returns False if it was not open."""
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE sessions SET status = 'closed', ended_at = ? WHERE session_id = ? AND status = 'open'",
+            (datetime.now().isoformat(), session_id),
+        )
+        return cursor.rowcount > 0
+
+
+def get_session(session_id: int) -> tuple[int, int, int | None, str, str | None, str] | None:
+    """Return (session_id, course_id, classroom_id, started_at, ended_at, status), or None."""
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT session_id, course_id, classroom_id, started_at, ended_at, status
+            FROM sessions WHERE session_id = ?
+            """,
+            (session_id,),
+        )
+        return cursor.fetchone()
+
+
+def log_session_attendance(session_id: int, student_id: int, confidence: float | None = None) -> bool:
+    """Mark a student present in a session. Each student is recorded at most once per session,
+    and only while the session is open. Returns True if a new record was written.
+    """
+    with _get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT courses.code FROM sessions
+            JOIN courses ON courses.course_id = sessions.course_id
+            WHERE sessions.session_id = ? AND sessions.status = 'open'
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return False
+
+        # session_name is filled with the course code so the legacy dashboard can still show the row.
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO attendance (student_id, timestamp, session_name, session_id, confidence)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (student_id, datetime.now().isoformat(), row[0], session_id, confidence),
+        )
+        return cursor.rowcount > 0
+
+
+def get_session_attendance(session_id: int) -> list[tuple[int, str, str, float | None]]:
+    """Return who was marked present in a session as (student_id, name, timestamp, confidence),
+    in the order they were recognized.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT students.student_id, students.name, attendance.timestamp, attendance.confidence
             FROM attendance
             JOIN students ON students.student_id = attendance.student_id
-            ORDER BY attendance.timestamp DESC
-            """
+            WHERE attendance.session_id = ?
+            ORDER BY attendance.timestamp ASC
+            """,
+            (session_id,),
         )
         return cursor.fetchall()
 
 
 if __name__ == "__main__":
-    # Quick manual test: create the tables, enroll a fake student, and log attendance twice in a
-    # row to confirm the duplicate rule kicks in. Run with: python src/database.py
     print(f"Initializing database at {DB_PATH} ...")
     init_db()
 
     student_id = save_student("Test Student", b"fake-encoding-bytes")
     print(f"Saved test student with student_id={student_id}")
-
     print("Enrolled students:", get_all_students())
 
-    print("First log_attendance call:", log_attendance(student_id), "(expected True)")
-    print("Immediate second call:", log_attendance(student_id), "(expected False, duplicate)")
+    print("First log_attendance (General):", log_attendance(student_id), "(expected True)")
+    print("Immediate second call (General):", log_attendance(student_id), "(expected False, duplicate window)")
+
+    print("Log under 'Math 101':", log_attendance(student_id, "Math 101"), "(expected True)")
+    print("Second log under 'Math 101':", log_attendance(student_id, "Math 101"), "(expected False, session duplicate)")
+
+    print("Sessions recorded:", get_all_sessions())
+    print("Attendance log:", get_attendance_log())

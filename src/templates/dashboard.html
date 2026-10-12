@@ -2,50 +2,236 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Face Recognition Attendance</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Face Recognition Attendance Dashboard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <h1>📸 Face Recognition Attendance</h1>
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
 
-  <section id="enroll-section">
-    <h2>Enroll Student</h2>
-    <p class="hint">Type the name, then either look at the webcam and click Enroll, or choose a photo of the student and click Enroll from Photo.</p>
-    <div class="row">
-      <input id="name-input" type="text" placeholder="Student name">
-      <button id="enroll-button">Enroll</button>
+  <!-- Top Header -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-icon">🎓</span>
+      <div>
+        <h1>Face Recognition Attendance</h1>
+        <p class="subtitle">Automated biometric classroom attendance</p>
+      </div>
     </div>
-    <div class="row">
-      <input id="enroll-photo-input" type="file" accept="image/*">
-      <button id="enroll-photo-button">Enroll from Photo</button>
+    <div class="header-stats">
+      <div class="stat-pill">
+        <span class="stat-label">Active Session:</span>
+        <strong id="badge-active-session">General</strong>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">Enrolled:</span>
+        <strong id="badge-enrolled-count">0</strong>
+      </div>
+      <div class="stat-pill" id="badge-camera-pill">
+        <span class="status-dot" id="camera-status-dot"></span>
+        <span id="badge-camera-status">Camera Off</span>
+      </div>
     </div>
-    <p id="enroll-status" class="status"></p>
-  </section>
+  </header>
 
-  <section id="attendance-section">
-    <h2>Take Attendance</h2>
-    <p class="hint">Click Take Attendance to recognize whoever is in front of the webcam, or upload a photo (e.g. a group photo of the class) to recognize everyone in it.</p>
-    <button id="capture-button">Take Attendance</button>
-    <div class="row">
-      <input id="attendance-photo-input" type="file" accept="image/*">
-      <button id="attendance-photo-button">Recognize from Photo</button>
-    </div>
-    <p id="capture-status" class="status"></p>
-  </section>
+  <!-- Navigation Tabs -->
+  <nav class="nav-tabs">
+    <button class="nav-tab active" data-tab="tab-attendance">🎥 Live Attendance</button>
+    <button class="nav-tab" data-tab="tab-enroll">🧑‍🎓 Student Enrollment</button>
+    <button class="nav-tab" data-tab="tab-records">📊 Attendance History</button>
+    <button class="nav-tab" data-tab="tab-roster">👥 Students Roster</button>
+  </nav>
 
-  <section id="log-section">
-    <h2>Attendance Log</h2>
-    <div class="row">
-      <button id="refresh-button">Refresh</button>
-      <a id="export-link" href="/api/attendance/export.csv">Export CSV</a>
-    </div>
-    <table id="log-table">
-      <thead>
-        <tr><th>Student</th><th>Timestamp</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </section>
+  <!-- Main Content Container -->
+  <main class="main-content">
+    
+    <!-- TAB 1: LIVE ATTENDANCE -->
+    <section id="tab-attendance" class="tab-pane active">
+      <div class="session-bar card">
+        <div class="session-controls">
+          <label for="session-select"><strong>Current Session / Course:</strong></label>
+          <div class="session-inputs">
+            <select id="session-select">
+              <option value="General">General</option>
+            </select>
+            <input type="text" id="new-session-input" placeholder="Or enter new session name (e.g. CS101 Lab 1)">
+            <button id="btn-set-session" class="btn btn-secondary">Set Session</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="attendance-grid">
+        <!-- Live Video Stream Area -->
+        <div class="card stream-card">
+          <div class="card-header">
+            <h3>Webcam Attendance Stream</h3>
+            <div class="stream-actions">
+              <button id="btn-start-stream" class="btn btn-primary">Start Live Stream</button>
+              <button id="btn-stop-stream" class="btn btn-outline" disabled>Stop Stream</button>
+            </div>
+          </div>
+          
+          <div class="stream-wrapper">
+            <img id="video-stream" src="/video_feed" alt="Live Webcam Feed">
+          </div>
+
+          <div class="stream-toolbar">
+            <label class="toggle-switch">
+              <input type="checkbox" id="chk-auto-recognize">
+              <span class="slider"></span>
+              <span class="toggle-label">Auto-Log Attendance from Live Stream</span>
+            </label>
+            <button id="btn-single-capture" class="btn btn-accent">📸 Take Snapshot Attendance</button>
+          </div>
+          <div id="live-detection-status" class="status-text"></div>
+        </div>
+
+        <!-- Attendance from Photo Upload Area -->
+        <div class="card side-card">
+          <h3>Classroom Photo Attendance</h3>
+          <p class="hint">Upload a class group photo or snapshot to recognize multiple students simultaneously.</p>
+          
+          <div class="drop-zone" id="attendance-drop-zone">
+            <input type="file" id="attendance-photo-file" accept="image/*" class="file-input">
+            <div class="drop-content">
+              <span class="upload-icon">📁</span>
+              <p>Click or drag a classroom photo here</p>
+            </div>
+            <img id="attendance-photo-preview" class="image-preview" alt="Preview">
+          </div>
+
+          <button id="btn-recognize-photo" class="btn btn-primary btn-block" disabled>Recognize from Photo</button>
+          
+          <div id="photo-recognition-results" class="results-box"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: STUDENT ENROLLMENT -->
+    <section id="tab-enroll" class="tab-pane">
+      <div class="enroll-grid">
+        <!-- Method A: Webcam Snapshot -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Enroll via Webcam</h3>
+          </div>
+          <p class="hint">Ensure the student faces the camera in good lighting, enter their name, and capture.</p>
+          
+          <div class="form-group">
+            <label for="enroll-cam-name">Student Full Name:</label>
+            <input type="text" id="enroll-cam-name" placeholder="e.g. John Doe" class="input-field">
+          </div>
+          
+          <button id="btn-enroll-cam" class="btn btn-primary btn-block">📸 Capture & Enroll</button>
+          <div id="enroll-cam-status" class="status-text"></div>
+        </div>
+
+        <!-- Method B: Upload ID Photo -->
+        <div class="card">
+          <div class="card-header">
+            <h3>Enroll from Photo File</h3>
+          </div>
+          <p class="hint">Upload a clear portrait photo (JPG or PNG). Automatic CNN detector activates if needed.</p>
+
+          <div class="form-group">
+            <label for="enroll-photo-name">Student Full Name:</label>
+            <input type="text" id="enroll-photo-name" placeholder="e.g. Jane Smith" class="input-field">
+          </div>
+
+          <div class="drop-zone" id="enroll-drop-zone">
+            <input type="file" id="enroll-photo-file" accept="image/*" class="file-input">
+            <div class="drop-content">
+              <span class="upload-icon">🖼️</span>
+              <p>Click or drag student photo here</p>
+            </div>
+            <img id="enroll-photo-preview" class="image-preview" alt="Preview">
+          </div>
+
+          <button id="btn-enroll-photo" class="btn btn-primary btn-block" disabled>Enroll from Photo</button>
+          <div id="enroll-photo-status" class="status-text"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: ATTENDANCE HISTORY -->
+    <section id="tab-records" class="tab-pane">
+      <div class="card">
+        <div class="records-header">
+          <div class="filter-controls">
+            <label for="records-session-filter">Filter by Session:</label>
+            <select id="records-session-filter">
+              <option value="ALL">All Sessions</option>
+            </select>
+          </div>
+          <div class="records-actions">
+            <button id="btn-refresh-records" class="btn btn-secondary">🔄 Refresh</button>
+            <a id="btn-export-csv" href="/api/attendance/export.csv" class="btn btn-success">📥 Export to CSV</a>
+          </div>
+        </div>
+
+        <!-- Stats Overview Cards -->
+        <div class="stats-row">
+          <div class="mini-stat">
+            <span class="mini-stat-title">Total Records</span>
+            <span id="stat-total-records" class="mini-stat-val">0</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-stat-title">Unique Students</span>
+            <span id="stat-unique-students" class="mini-stat-val">0</span>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-stat-title">Current Filter Records</span>
+            <span id="stat-filtered-records" class="mini-stat-val">0</span>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table" id="records-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Student Name</th>
+                <th>Session</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="4" class="text-center">Loading records...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: STUDENTS ROSTER -->
+    <section id="tab-roster" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <h3>Enrolled Students Roster</h3>
+          <button id="btn-refresh-roster" class="btn btn-secondary">🔄 Refresh Roster</button>
+        </div>
+        <p class="hint">List of all students stored in the system. Enrolling new students makes them recognized immediately.</p>
+        
+        <div class="table-responsive">
+          <table class="data-table" id="roster-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Student Name</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="4" class="text-center">Loading students...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
 
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
