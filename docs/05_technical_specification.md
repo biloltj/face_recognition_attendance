@@ -1,11 +1,10 @@
 # 📄 Technical Specification Document
 
-**Project Title:** Face Recognition Attendance System
-**Course:** [Fill in: Capstone Project / Software Engineering course name]
-**Instructor:** [Fill in: Instructor name]
-**Team Members:** Bilol Arzykulov, Ayub Timurov
-**Date:** [Fill in submission date]
-
+- **Project Title:** Face Recognition Attendance System
+- **Course:** Capstone Project 
+- **Instructor:** Rustam Tagaev
+- **Team Members:** Bilol Arzykulov
+- **Date:** 
 ---
 
 ## Abstract
@@ -129,7 +128,7 @@ contract in [`05_collaboration_workflow.md`](05_collaboration_workflow.md).
 | Module | Owner | Responsibilities |
 |--------|-------|-------------------|
 | Recognition + Integration | Bilol Arzykulov | Webcam capture, face detection, face-encoding computation, matching against enrolled students, wiring modules together |
-| Data + Documentation | Ayub Timurov | Database schema, enrollment storage, attendance logging with duplicate prevention, log export, SE documentation upkeep |
+| Data + Documentation | Database schema, enrollment storage, attendance logging with duplicate prevention, log export, SE documentation upkeep |
 
 ### 3.5 Known Risks and Mitigations
 
@@ -149,7 +148,7 @@ in a working, demonstrable increment rather than partially completed features.
 
 ### 4.2 Team Roles
 - **Bilol Arzykulov** — Recognition & Integration
-- **Ayub Timurov** — Data & Documentation
+
 
 ### 4.3 Sprint Plan
 

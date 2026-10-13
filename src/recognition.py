@@ -69,7 +69,7 @@ def frames_from_webcam(camera_index: int = 0, width: int | None = None, height: 
 
 
 def get_face_encoding(
-    image: np.ndarray, resize_factor: float = 1.0, cnn_fallback: bool = False
+    image: np.ndarray, resize_factor: float = 1.0, cnn_fallback: bool = False, num_jitters: int = 1
 ) -> bytes | None:
     """Given an image (as returned by capture_frame_from_webcam), find the first face in it and
     return its encoding as raw bytes, ready to be stored in the database.
@@ -85,6 +85,10 @@ def get_face_encoding(
     ID-style photo where the face fills most of the image. CNN can take 10+ seconds on a CPU, so this
     is only worth it for one-off enrollment photos, never for a live recognition loop.
 
+    `num_jitters` encodes the face that many times with small random shifts and averages the
+    results. The stored reference then depends less on the exact framing of one photo, so live
+    matches are more consistent. 10 costs well under a second, so enrollment should use it.
+
     Returns None if no face is found in the image.
     """
     if resize_factor != 1.0:
@@ -99,7 +103,9 @@ def get_face_encoding(
     if not face_locations:
         return None
 
-    encodings = face_recognition.face_encodings(rgb_image, known_face_locations=face_locations)
+    encodings = face_recognition.face_encodings(
+        rgb_image, known_face_locations=face_locations[:1], num_jitters=num_jitters
+    )
     if not encodings:
         return None
 
@@ -163,8 +169,21 @@ def match_face(
     tolerance: float = 0.5,
     min_margin: float = 0.08,
 ) -> int | None:
-    """Compare a live face encoding against every enrolled student and return the closest match's
-    student_id, or None if nobody is close enough (or the match is too ambiguous — see below).
+    """Return the matched student_id, or None. See match_face_with_distance for the rules."""
+    student_id, _ = match_face_with_distance(encoding, known_students, tolerance, min_margin)
+    return student_id
+
+
+def match_face_with_distance(
+    encoding: bytes,
+    known_students: list[tuple[int, str, bytes]],
+    tolerance: float = 0.5,
+    min_margin: float = 0.08,
+) -> tuple[int | None, float | None]:
+    """Compare a live face encoding against every enrolled student and return
+    (student_id, distance) for the closest match, or (None, None) if nobody is close enough (or the
+    match is too ambiguous — see below). The distance is saved with attendance as its confidence:
+    lower means a surer match.
 
     `known_students` is the list returned by database.get_all_students(): (student_id, name, encoding_bytes).
 
@@ -180,7 +199,7 @@ def match_face(
     nothing to compare against, so the margin check is skipped.
     """
     if not known_students:
-        return None
+        return None, None
 
     live_encoding = bytes_to_encoding(encoding)
     known_encodings = [bytes_to_encoding(student_encoding) for _, _, student_encoding in known_students]
@@ -191,16 +210,17 @@ def match_face(
     sorted_indices = np.argsort(distances)
     best_index = int(sorted_indices[0])
 
-    if distances[best_index] > tolerance:
-        return None
+    best_distance = float(distances[best_index])
+    if best_distance > tolerance:
+        return None, None
 
     if len(distances) > 1:
         second_best_distance = distances[sorted_indices[1]]
-        if second_best_distance - distances[best_index] < min_margin:
-            return None
+        if second_best_distance - best_distance < min_margin:
+            return None, None
 
     student_id, _, _ = known_students[best_index]
-    return student_id
+    return student_id, best_distance
 
 
 if __name__ == "__main__":

@@ -16,6 +16,10 @@ import recognition
 MAX_CAPTURE_ATTEMPTS = 5
 SECONDS_BETWEEN_ATTEMPTS = 1.0
 
+# The reference encoding is averaged over this many slightly shifted copies of the face, so it
+# doesn't depend on the exact framing of one capture (see recognition.get_face_encoding).
+ENROLLMENT_JITTERS = 10
+
 # A guard against garbage input (e.g. a name field accidentally receiving something like a
 # pasted command line instead of an actual name) rather than a real limit on name length.
 MAX_NAME_LENGTH = 100
@@ -33,7 +37,7 @@ class EnrollmentResult(NamedTuple):
 
 def _validate_name(name: str) -> str | None:
     """Returns an error message if `name` is invalid, or None if it's fine to enroll."""
-    if not name or len(name) > MAX_NAME_LENGTH:
+    if not name or not name.strip() or len(name) > MAX_NAME_LENGTH:
         return f"Invalid name: must be non-empty and at most {MAX_NAME_LENGTH} characters."
     return None
 
@@ -86,7 +90,7 @@ def enroll_student(name: str) -> EnrollmentResult:
             print(message)
             return EnrollmentResult(None, message)
 
-        encoding = recognition.get_face_encoding(frame)
+        encoding = recognition.get_face_encoding(frame, num_jitters=ENROLLMENT_JITTERS)
         if encoding is not None:
             return _finish_enrollment(name, encoding, students)
 
@@ -118,7 +122,7 @@ def enroll_from_frame(name: str, frame, cnn_fallback: bool = False) -> Enrollmen
         return EnrollmentResult(None, error)
 
     database.init_db()
-    encoding = recognition.get_face_encoding(frame, cnn_fallback=cnn_fallback)
+    encoding = recognition.get_face_encoding(frame, cnn_fallback=cnn_fallback, num_jitters=ENROLLMENT_JITTERS)
     if encoding is None:
         message = "No face detected. Make sure your face is clearly visible and try again."
         print(message)

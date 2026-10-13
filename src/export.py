@@ -38,6 +38,27 @@ def export_attendance_csv(path: Path = DEFAULT_CSV_PATH, session_name: str | Non
     return path
 
 
+def export_session_csv(session_id: int, path: Path | None = None) -> Path:
+    """Write one session's results (every expected student, present or absent) to a CSV file
+    and return the path written to.
+    """
+    path = path or DEFAULT_CSV_PATH.with_name(f"session_{session_id}.csv")
+    rows = database.get_session_results(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Student ID", "Student", "Status", "Time Marked", "Confidence"])
+        for student_id, name, present, timestamp, confidence in rows:
+            writer.writerow([
+                student_id,
+                name,
+                "Present" if present else "Absent",
+                timestamp or "",
+                "" if confidence is None else f"{confidence:.3f}",
+            ])
+    return path
+
+
 if __name__ == "__main__":
     # Run with: python src/export.py        -> prints the table
     #           python src/export.py --csv  -> prints the table AND saves a CSV file

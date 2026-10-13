@@ -38,6 +38,8 @@
   <!-- Navigation Tabs -->
   <nav class="nav-tabs">
     <button class="nav-tab active" data-tab="tab-attendance">🎥 Live Attendance</button>
+    <button class="nav-tab" data-tab="tab-results">✅ Session Results</button>
+    <button class="nav-tab" data-tab="tab-courses">📚 Courses</button>
     <button class="nav-tab" data-tab="tab-enroll">🧑‍🎓 Student Enrollment</button>
     <button class="nav-tab" data-tab="tab-records">📊 Attendance History</button>
     <button class="nav-tab" data-tab="tab-roster">👥 Students Roster</button>
@@ -50,15 +52,21 @@
     <section id="tab-attendance" class="tab-pane active">
       <div class="session-bar card">
         <div class="session-controls">
-          <label for="session-select"><strong>Current Session / Course:</strong></label>
+          <label for="course-select"><strong>Course:</strong></label>
           <div class="session-inputs">
-            <select id="session-select">
-              <option value="General">General</option>
+            <select id="course-select">
+              <option value="">Loading courses...</option>
             </select>
-            <input type="text" id="new-session-input" placeholder="Or enter new session name (e.g. CS101 Lab 1)">
-            <button id="btn-set-session" class="btn btn-secondary">Set Session</button>
+            <button id="btn-take-attendance" class="btn btn-primary">▶ Take Attendance</button>
+            <button id="btn-end-session" class="btn btn-danger" disabled>■ End Session</button>
           </div>
         </div>
+        <div id="session-info" class="status-text">No attendance session running.</div>
+        <div id="session-countdown" class="session-countdown" hidden>
+          <span id="session-countdown-text" class="session-countdown-text"></span>
+          <div class="session-countdown-track"><div id="session-countdown-bar" class="session-countdown-bar"></div></div>
+        </div>
+        <div id="session-present" class="results-box"></div>
       </div>
 
       <div class="attendance-grid">
@@ -67,22 +75,18 @@
           <div class="card-header">
             <h3>Webcam Attendance Stream</h3>
             <div class="stream-actions">
-              <button id="btn-start-stream" class="btn btn-primary">Start Live Stream</button>
-              <button id="btn-stop-stream" class="btn btn-outline" disabled>Stop Stream</button>
+              <button id="btn-start-stream" class="btn btn-secondary">Preview Camera</button>
+              <button id="btn-stop-stream" class="btn btn-outline" disabled>Stop Preview</button>
             </div>
           </div>
-          
+
           <div class="stream-wrapper">
             <img id="video-stream" src="/video_feed" alt="Live Webcam Feed">
           </div>
 
           <div class="stream-toolbar">
-            <label class="toggle-switch">
-              <input type="checkbox" id="chk-auto-recognize">
-              <span class="slider"></span>
-              <span class="toggle-label">Auto-Log Attendance from Live Stream</span>
-            </label>
-            <button id="btn-single-capture" class="btn btn-accent">📸 Take Snapshot Attendance</button>
+            <span class="hint">Preview only shows the camera. Students are recognized while a session is running.</span>
+            <button id="btn-single-capture" class="btn btn-accent" disabled>📸 Take Snapshot Attendance</button>
           </div>
           <div id="live-detection-status" class="status-text"></div>
         </div>
@@ -90,7 +94,7 @@
         <!-- Attendance from Photo Upload Area -->
         <div class="card side-card">
           <h3>Classroom Photo Attendance</h3>
-          <p class="hint">Upload a class group photo or snapshot to recognize multiple students simultaneously.</p>
+          <p class="hint">Upload a class group photo to mark students present in the running session.</p>
           
           <div class="drop-zone" id="attendance-drop-zone">
             <input type="file" id="attendance-photo-file" accept="image/*" class="file-input">
@@ -104,6 +108,134 @@
           <button id="btn-recognize-photo" class="btn btn-primary btn-block" disabled>Recognize from Photo</button>
           
           <div id="photo-recognition-results" class="results-box"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: SESSION RESULTS -->
+    <section id="tab-results" class="tab-pane">
+      <div class="enroll-grid">
+        <div class="card">
+          <div class="card-header">
+            <h3>Sessions</h3>
+          </div>
+          <div class="form-group">
+            <label for="results-course-filter">Course:</label>
+            <select id="results-course-filter" class="input-field">
+              <option value="">All courses</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="sessions-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Course</th>
+                  <th>Present</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="4" class="text-center">Loading sessions...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3 id="results-title">Session Results</h3>
+            <a id="btn-export-session" class="btn btn-success" hidden>📥 Export CSV</a>
+          </div>
+          <p id="results-subtitle" class="hint">Choose a session on the left to see who was present and absent.</p>
+
+          <div class="stats-row" id="results-stats" hidden>
+            <div class="mini-stat">
+              <span class="mini-stat-title">Present</span>
+              <span id="results-present" class="mini-stat-val">0</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-stat-title">Absent</span>
+              <span id="results-absent" class="mini-stat-val">0</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-stat-title">Attendance Rate</span>
+              <span id="results-rate" class="mini-stat-val">0%</span>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="data-table" id="session-results-table">
+              <thead>
+                <tr>
+                  <th>Student</th>
+                  <th>Status</th>
+                  <th>Time Marked</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB: COURSES -->
+    <section id="tab-courses" class="tab-pane">
+      <div class="enroll-grid">
+        <div class="card">
+          <div class="card-header">
+            <h3>Create Course</h3>
+          </div>
+          <div class="form-group">
+            <label for="course-code">Course Code:</label>
+            <input type="text" id="course-code" placeholder="e.g. MATH101" class="input-field">
+          </div>
+          <div class="form-group">
+            <label for="course-name">Course Name:</label>
+            <input type="text" id="course-name" placeholder="e.g. Calculus I" class="input-field">
+          </div>
+          <button id="btn-create-course" class="btn btn-primary btn-block">➕ Create Course</button>
+
+          <div class="table-responsive">
+            <table class="data-table" id="courses-table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Name</th>
+                  <th>Students</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="3" class="text-center">Loading courses...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Course Students</h3>
+          </div>
+          <div class="form-group">
+            <label for="course-roster-select">Course:</label>
+            <select id="course-roster-select" class="input-field"></select>
+          </div>
+          <p class="hint">Tick the students who take this course. Only they are matched during its sessions. Changes save immediately.</p>
+          <div class="table-responsive">
+            <table class="data-table" id="course-roster-table">
+              <thead>
+                <tr>
+                  <th>In Course</th>
+                  <th>ID</th>
+                  <th>Student Name</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="3" class="text-center">Create a course first.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>

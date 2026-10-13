@@ -184,6 +184,55 @@ body {
   margin-bottom: 1.5rem;
 }
 
+.session-countdown {
+  margin-top: 0.75rem;
+}
+
+.session-countdown[hidden] {
+  display: none;
+}
+
+.session-countdown-text {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+  margin-bottom: 0.4rem;
+}
+
+.session-countdown-text.ending {
+  color: var(--danger);
+}
+
+.session-countdown-track {
+  height: 8px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.session-countdown-bar {
+  height: 100%;
+  width: 100%;
+  background: var(--primary);
+  transition: width 1s linear;
+}
+
+.status-present {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.status-absent {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.data-table tr.selected td {
+  background: var(--primary-light);
+}
+
 .session-controls {
   display: flex;
   align-items: center;

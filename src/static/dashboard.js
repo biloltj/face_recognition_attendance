@@ -15,6 +15,17 @@ function showToast(message, type = "info") {
   }, 4000);
 }
 
+// Names and session labels come from user input. Escape them before putting them inside an
+// innerHTML template, so text like "<img onerror=...>" is shown as text instead of being run.
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function apiRequest(url, options = {}) {
   try {
     const res = await fetch(url, options);
@@ -46,11 +57,17 @@ tabs.forEach((tab) => {
     // Refresh tab-specific data
     if (target === "tab-records") loadAttendanceRecords();
     if (target === "tab-roster") loadStudentsRoster();
+    if (target === "tab-courses") loadCourses().then(loadCourseRoster);
+    if (target === "tab-results") loadSessionHistory();
   });
 });
 
 // ------------------------------------------------------------------ State & Badges
-let currentActiveSession = "General";
+let currentSession = null; // the running attendance session from /api/sessions/current, or null
+let sessionPollTimer = null;
+let countdownTimer = null;
+let sessionDeadline = 0; // local Date.now() value at which the running session ends
+let endingByTeacher = false; // true while our own End Session request is in flight
 
 function updateCameraBadge(isRunning) {
   const dot = document.getElementById("camera-status-dot");
@@ -60,82 +77,402 @@ function updateCameraBadge(isRunning) {
 
   if (isRunning) {
     dot.classList.add("active");
-    text.textContent = "Live Stream Active";
-    btnStart.disabled = true;
-    btnStop.disabled = false;
+    text.textContent = currentSession ? "Taking Attendance" : "Preview Active";
   } else {
     dot.classList.remove("active");
     text.textContent = "Camera Inactive";
-    btnStart.disabled = false;
-    btnStop.disabled = true;
+  }
+  // While a session runs, the camera belongs to it: use End Session to stop.
+  btnStart.disabled = isRunning || currentSession !== null;
+  btnStop.disabled = !isRunning || currentSession !== null;
+}
+
+// ------------------------------------------------------------------ Attendance Sessions
+const courseSelect = document.getElementById("course-select");
+const btnTakeAttendance = document.getElementById("btn-take-attendance");
+const btnEndSession = document.getElementById("btn-end-session");
+const sessionInfo = document.getElementById("session-info");
+const sessionPresent = document.getElementById("session-present");
+const sessionCountdown = document.getElementById("session-countdown");
+const sessionCountdownText = document.getElementById("session-countdown-text");
+const sessionCountdownBar = document.getElementById("session-countdown-bar");
+
+function updateCountdown() {
+  if (!currentSession) return;
+  const secondsLeft = Math.max(0, Math.round((sessionDeadline - Date.now()) / 1000));
+  const minutes = Math.floor(secondsLeft / 60);
+  const seconds = String(secondsLeft % 60).padStart(2, "0");
+  sessionCountdownText.textContent = secondsLeft > 0 ? `⏱ ${minutes}:${seconds} left` : "⏱ Finishing…";
+  sessionCountdownText.classList.toggle("ending", secondsLeft <= 60);
+  sessionCountdownBar.style.width = `${(secondsLeft / currentSession.duration_seconds) * 100}%`;
+}
+
+function renderSession(session) {
+  const previous = currentSession;
+  currentSession = session.active ? session : null;
+  const active = currentSession !== null;
+
+  // The server closes the session when time is up; the next poll notices it ended without us.
+  if (previous && !active && !endingByTeacher) {
+    showToast(
+      `Time is up: ${previous.course_code} session ended with ${previous.present.length} of ${previous.roster_size} present`,
+      "success"
+    );
+    updateCameraBadge(false);
+    loadSessions();
+    loadAttendanceRecords();
+    loadSessionHistory();
+  }
+
+  sessionCountdown.hidden = !active;
+  if (active) {
+    // Rebuilt from the server's seconds_left on every poll, so the countdown never drifts far.
+    sessionDeadline = Date.now() + session.seconds_left * 1000;
+    updateCountdown();
+    if (countdownTimer === null) countdownTimer = setInterval(updateCountdown, 1000);
+  } else if (countdownTimer !== null) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+
+  document.getElementById("badge-active-session").textContent = active ? session.course_code : "None";
+  btnTakeAttendance.disabled = active;
+  btnEndSession.disabled = !active;
+  courseSelect.disabled = active;
+  btnSingleCapture.disabled = !active;
+  btnRecognizePhoto.disabled = !active || !attendancePhotoFile.files[0];
+
+  sessionPresent.innerHTML = "";
+  if (!active) {
+    sessionInfo.textContent = "No attendance session running.";
+  } else {
+    const started = new Date(session.started_at).toLocaleTimeString();
+    sessionInfo.textContent =
+      `Session #${session.session_id} · ${session.course_code} – ${session.course_name} · ` +
+      `started ${started} · ${session.present.length} of ${session.roster_size} present`;
+
+    session.present.forEach((p) => {
+      const badge = document.createElement("div");
+      badge.className = "result-badge known";
+      const name = document.createElement("strong");
+      name.textContent = p.name;
+      const time = document.createElement("span");
+      time.textContent = new Date(p.timestamp).toLocaleTimeString();
+      badge.append(name, time);
+      sessionPresent.appendChild(badge);
+    });
+  }
+
+  // Poll while a session runs so newly recognized students appear without refreshing.
+  if (active && sessionPollTimer === null) {
+    sessionPollTimer = setInterval(loadCurrentSession, 3000);
+  } else if (!active && sessionPollTimer !== null) {
+    clearInterval(sessionPollTimer);
+    sessionPollTimer = null;
   }
 }
 
-// ------------------------------------------------------------------ Sessions
+async function loadCurrentSession() {
+  try {
+    renderSession(await apiRequest("/api/sessions/current"));
+  } catch (e) {}
+}
+
+btnTakeAttendance.addEventListener("click", async () => {
+  if (!courseSelect.value) {
+    showToast("Please choose a course first", "error");
+    return;
+  }
+
+  btnTakeAttendance.disabled = true;
+  try {
+    const session = await apiRequest("/api/sessions/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ course_id: Number(courseSelect.value) }),
+    });
+    renderSession(session);
+    updateCameraBadge(true);
+    videoStream.src = `/video_feed?t=${Date.now()}`;
+    showToast(`Taking attendance for ${session.course_code}`, "success");
+  } catch (e) {
+    btnTakeAttendance.disabled = false;
+  }
+});
+
+btnEndSession.addEventListener("click", async () => {
+  btnEndSession.disabled = true;
+  endingByTeacher = true;
+  try {
+    const res = await apiRequest("/api/sessions/stop", { method: "POST" });
+    renderSession({ active: false });
+    updateCameraBadge(false);
+    showToast(`Session ended: ${res.present_count} of ${res.roster_size} students present`, "success");
+    loadSessions();
+    loadAttendanceRecords();
+    openTab("tab-results");
+    showSessionResults(res.session_id);
+  } catch (e) {
+    endingByTeacher = false; // e.g. the timer already ended it: let the poll report that instead
+    loadCurrentSession();
+  } finally {
+    endingByTeacher = false;
+  }
+});
+
+// Fills the Attendance History filter with the session names found in the log.
 async function loadSessions() {
   try {
     const data = await apiRequest("/api/sessions");
-    const select = document.getElementById("session-select");
     const filterSelect = document.getElementById("records-session-filter");
-    currentActiveSession = data.active || "General";
-    document.getElementById("badge-active-session").textContent = currentActiveSession;
-
-    // Populate dropdowns
-    select.innerHTML = "";
+    const selected = filterSelect.value;
     filterSelect.innerHTML = '<option value="ALL">All Sessions</option>';
-
     data.sessions.forEach((s) => {
-      const opt1 = document.createElement("option");
-      opt1.value = s;
-      opt1.textContent = s;
-      if (s === currentActiveSession) opt1.selected = true;
-      select.appendChild(opt1);
-
-      const opt2 = document.createElement("option");
-      opt2.value = s;
-      opt2.textContent = s;
-      filterSelect.appendChild(opt2);
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      if (s === selected) opt.selected = true;
+      filterSelect.appendChild(opt);
     });
   } catch (e) {
     console.error("Failed to load sessions:", e);
   }
 }
 
-document.getElementById("btn-set-session").addEventListener("click", async () => {
-  const newSessionInput = document.getElementById("new-session-input");
-  const select = document.getElementById("session-select");
-  const sessionToSet = newSessionInput.value.trim() || select.value;
+// ------------------------------------------------------------------ Session Results
+const resultsCourseFilter = document.getElementById("results-course-filter");
+const sessionsTableBody = document.querySelector("#sessions-table tbody");
+const sessionResultsTableBody = document.querySelector("#session-results-table tbody");
+let selectedResultsSessionId = null;
 
-  if (!sessionToSet) {
-    showToast("Please enter or select a session name", "error");
+function textCell(value, className) {
+  const td = document.createElement("td");
+  td.textContent = value;
+  if (className) td.className = className;
+  return td;
+}
+
+async function loadSessionHistory() {
+  const courseId = resultsCourseFilter.value;
+  try {
+    const sessions = await apiRequest(`/api/sessions/history${courseId ? `?course_id=${courseId}` : ""}`);
+    sessionsTableBody.innerHTML = "";
+    if (sessions.length === 0) {
+      sessionsTableBody.innerHTML = '<tr><td colspan="4" class="text-center">No sessions yet.</td></tr>';
+      return;
+    }
+
+    sessions.forEach((s) => {
+      const tr = document.createElement("tr");
+      if (s.session_id === selectedResultsSessionId) tr.classList.add("selected");
+      const started = new Date(s.started_at);
+      const running = s.status === "open" ? " (running)" : "";
+      tr.append(
+        textCell(`${started.toLocaleDateString()} ${started.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`),
+        textCell(s.course_code + running),
+        textCell(`${s.present_count} / ${s.expected_count}`)
+      );
+
+      const actionCell = document.createElement("td");
+      const viewBtn = document.createElement("button");
+      viewBtn.className = "btn btn-secondary";
+      viewBtn.style.cssText = "padding: 0.25rem 0.6rem; font-size: 0.8rem;";
+      viewBtn.textContent = "View";
+      viewBtn.addEventListener("click", () => showSessionResults(s.session_id));
+      actionCell.appendChild(viewBtn);
+      tr.appendChild(actionCell);
+
+      sessionsTableBody.appendChild(tr);
+    });
+  } catch (e) {
+    sessionsTableBody.innerHTML = '<tr><td colspan="4" class="text-center">Failed to load sessions.</td></tr>';
+  }
+}
+
+async function showSessionResults(sessionId) {
+  selectedResultsSessionId = sessionId;
+  try {
+    const r = await apiRequest(`/api/sessions/${sessionId}/results`);
+    const started = new Date(r.started_at);
+    const ended = r.ended_at ? new Date(r.ended_at).toLocaleTimeString() : "still running";
+
+    document.getElementById("results-title").textContent = `${r.course_code} – ${r.course_name}`;
+    document.getElementById("results-subtitle").textContent =
+      `Session #${r.session_id} · ${started.toLocaleDateString()} · ${started.toLocaleTimeString()} – ${ended}`;
+    document.getElementById("results-stats").hidden = false;
+    document.getElementById("results-present").textContent = r.present_count;
+    document.getElementById("results-absent").textContent = r.absent_count;
+    const total = r.present_count + r.absent_count;
+    document.getElementById("results-rate").textContent = total ? `${Math.round((r.present_count / total) * 100)}%` : "–";
+
+    const exportBtn = document.getElementById("btn-export-session");
+    exportBtn.href = `/api/sessions/${sessionId}/export.csv`;
+    exportBtn.hidden = false;
+
+    sessionResultsTableBody.innerHTML = "";
+    if (r.students.length === 0) {
+      sessionResultsTableBody.innerHTML = '<tr><td colspan="3" class="text-center">No students were expected in this session.</td></tr>';
+    }
+    r.students.forEach((s) => {
+      const tr = document.createElement("tr");
+      tr.append(
+        textCell(s.name),
+        textCell(s.present ? "✅ Present" : "❌ Absent", s.present ? "status-present" : "status-absent"),
+        textCell(s.timestamp ? new Date(s.timestamp).toLocaleTimeString() : "—")
+      );
+      sessionResultsTableBody.appendChild(tr);
+    });
+
+    loadSessionHistory(); // rebuilds the list so the selected row is highlighted
+  } catch (e) {}
+}
+
+resultsCourseFilter.addEventListener("change", loadSessionHistory);
+
+function openTab(tabId) {
+  document.querySelector(`.nav-tab[data-tab="${tabId}"]`).click();
+}
+
+// ------------------------------------------------------------------ Courses
+const courseRosterSelect = document.getElementById("course-roster-select");
+const coursesTableBody = document.querySelector("#courses-table tbody");
+const courseRosterTableBody = document.querySelector("#course-roster-table tbody");
+
+function fillCourseSelect(select, courses, emptyLabel) {
+  const selected = select.value;
+  select.innerHTML = "";
+  if (courses.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = emptyLabel;
+    select.appendChild(opt);
+    return;
+  }
+  courses.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.course_id;
+    opt.textContent = `${c.code} – ${c.name} (${c.student_count} students)`;
+    if (String(c.course_id) === selected) opt.selected = true;
+    select.appendChild(opt);
+  });
+}
+
+async function loadCourses() {
+  try {
+    const courses = await apiRequest("/api/courses");
+    fillCourseSelect(courseSelect, courses, "No courses yet – create one in the Courses tab");
+    fillCourseSelect(courseRosterSelect, courses, "No courses yet");
+    const selectedFilter = resultsCourseFilter.value;
+    resultsCourseFilter.innerHTML = '<option value="">All courses</option>';
+    courses.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.course_id;
+      opt.textContent = `${c.code} – ${c.name}`;
+      if (String(c.course_id) === selectedFilter) opt.selected = true;
+      resultsCourseFilter.appendChild(opt);
+    });
+
+    coursesTableBody.innerHTML = "";
+    if (courses.length === 0) {
+      coursesTableBody.innerHTML = '<tr><td colspan="3" class="text-center">No courses yet.</td></tr>';
+    }
+    courses.forEach((c) => {
+      const tr = document.createElement("tr");
+      [c.code, c.name, c.student_count].forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      coursesTableBody.appendChild(tr);
+    });
+  } catch (e) {
+    console.error("Failed to load courses:", e);
+  }
+}
+
+async function loadCourseRoster() {
+  const courseId = courseRosterSelect.value;
+  if (!courseId) {
+    courseRosterTableBody.innerHTML = '<tr><td colspan="3" class="text-center">Create a course first.</td></tr>';
     return;
   }
 
   try {
-    const res = await apiRequest("/api/sessions/active", {
+    const [students, members] = await Promise.all([
+      apiRequest("/api/students"),
+      apiRequest(`/api/courses/${courseId}/students`),
+    ]);
+    const memberIds = new Set(members.map((m) => m.student_id));
+
+    courseRosterTableBody.innerHTML = "";
+    if (students.length === 0) {
+      courseRosterTableBody.innerHTML = '<tr><td colspan="3" class="text-center">No students enrolled yet.</td></tr>';
+      return;
+    }
+
+    students.forEach((s) => {
+      const tr = document.createElement("tr");
+      const checkCell = document.createElement("td");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = memberIds.has(s.student_id);
+      checkbox.addEventListener("change", async () => {
+        checkbox.disabled = true;
+        try {
+          await apiRequest(`/api/courses/${courseId}/students/${s.student_id}`, {
+            method: checkbox.checked ? "POST" : "DELETE",
+          });
+          loadCourses();
+        } catch (e) {
+          checkbox.checked = !checkbox.checked;
+        } finally {
+          checkbox.disabled = false;
+        }
+      });
+      checkCell.appendChild(checkbox);
+
+      const idCell = document.createElement("td");
+      idCell.textContent = `#${s.student_id}`;
+      const nameCell = document.createElement("td");
+      nameCell.textContent = s.name;
+      tr.append(checkCell, idCell, nameCell);
+      courseRosterTableBody.appendChild(tr);
+    });
+  } catch (e) {
+    courseRosterTableBody.innerHTML = '<tr><td colspan="3" class="text-center">Failed to load students.</td></tr>';
+  }
+}
+
+courseRosterSelect.addEventListener("change", loadCourseRoster);
+
+document.getElementById("btn-create-course").addEventListener("click", async () => {
+  const codeInput = document.getElementById("course-code");
+  const nameInput = document.getElementById("course-name");
+  const code = codeInput.value.trim();
+  const name = nameInput.value.trim();
+  if (!code || !name) {
+    showToast("Please enter both a course code and a course name", "error");
+    return;
+  }
+
+  try {
+    const course = await apiRequest("/api/courses", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: sessionToSet }),
+      body: JSON.stringify({ code, name }),
     });
-    currentActiveSession = res.active;
-    document.getElementById("badge-active-session").textContent = currentActiveSession;
-    newSessionInput.value = "";
-    showToast(`Active session set to: ${currentActiveSession}`, "success");
-    await loadSessions();
-    loadAttendanceRecords();
-  } catch (e) {
-    console.error(e);
-  }
-});
-
-document.getElementById("session-select").addEventListener("change", (e) => {
-  document.getElementById("new-session-input").value = e.target.value;
+    showToast(`Created course ${course.code}`, "success");
+    codeInput.value = "";
+    nameInput.value = "";
+    await loadCourses();
+    courseRosterSelect.value = String(course.course_id);
+    loadCourseRoster();
+  } catch (e) {}
 });
 
 // ------------------------------------------------------------------ Live Stream & Controls
 const btnStartStream = document.getElementById("btn-start-stream");
 const btnStopStream = document.getElementById("btn-stop-stream");
-const chkAutoRec = document.getElementById("chk-auto-recognize");
 const btnSingleCapture = document.getElementById("btn-single-capture");
 const liveDetectionStatus = document.getElementById("live-detection-status");
 const videoStream = document.getElementById("video-stream");
@@ -144,25 +481,17 @@ async function checkCameraStatus() {
   try {
     const status = await apiRequest("/api/camera/status");
     updateCameraBadge(status.running);
-    chkAutoRec.checked = status.auto_recognize;
   } catch (e) {}
 }
 
 btnStartStream.addEventListener("click", async () => {
   try {
     btnStartStream.disabled = true;
-    const res = await apiRequest("/api/camera/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session: currentActiveSession,
-        auto_recognize: chkAutoRec.checked,
-      }),
-    });
+    const res = await apiRequest("/api/camera/start", { method: "POST" });
     updateCameraBadge(res.running);
     if (res.running) {
       videoStream.src = `/video_feed?t=${Date.now()}`;
-      showToast("Live stream started", "success");
+      showToast("Camera preview started", "success");
     } else {
       showToast("Could not access webcam. Ensure no other app is using it.", "error");
     }
@@ -175,25 +504,7 @@ btnStopStream.addEventListener("click", async () => {
   try {
     await apiRequest("/api/camera/stop", { method: "POST" });
     updateCameraBadge(false);
-    showToast("Live stream stopped", "info");
-  } catch (e) {}
-});
-
-chkAutoRec.addEventListener("change", async () => {
-  try {
-    const res = await apiRequest("/api/camera/toggle_recognition", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        enabled: chkAutoRec.checked,
-        session: currentActiveSession,
-      }),
-    });
-    if (res.auto_recognize) {
-      showToast("Auto-attendance logging enabled on live stream", "info");
-    } else {
-      showToast("Auto-attendance logging paused", "info");
-    }
+    showToast("Camera preview stopped", "info");
   } catch (e) {}
 });
 
@@ -202,11 +513,7 @@ btnSingleCapture.addEventListener("click", async () => {
   btnSingleCapture.disabled = true;
 
   try {
-    const res = await apiRequest("/api/attendance/capture", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session: currentActiveSession }),
-    });
+    const res = await apiRequest("/api/attendance/capture", { method: "POST" });
 
     if (res.length === 0) {
       liveDetectionStatus.textContent = "No face detected in snapshot.";
@@ -214,11 +521,13 @@ btnSingleCapture.addEventListener("click", async () => {
     } else {
       const names = res.map((d) => d.name).join(", ");
       liveDetectionStatus.textContent = `Recognized: ${names}`;
-      showToast(`Logged attendance for: ${names}`, "success");
-      loadAttendanceRecords();
+      showToast(`Recognized: ${names}`, "success");
+      loadCurrentSession();
     }
+  } catch (e) {
+    liveDetectionStatus.textContent = "";
   } finally {
-    btnSingleCapture.disabled = false;
+    btnSingleCapture.disabled = currentSession === null;
   }
 });
 
@@ -245,7 +554,8 @@ function handleFilePreview(input, previewElement, submitButton) {
 }
 
 attendancePhotoFile.addEventListener("change", () => {
-  handleFilePreview(attendancePhotoFile, attendancePhotoPreview, btnRecognizePhoto);
+  // The button only becomes usable while a session is running (see renderSession).
+  handleFilePreview(attendancePhotoFile, attendancePhotoPreview, currentSession ? btnRecognizePhoto : null);
 });
 
 btnRecognizePhoto.addEventListener("click", async () => {
@@ -257,7 +567,6 @@ btnRecognizePhoto.addEventListener("click", async () => {
 
   const formData = new FormData();
   formData.append("photo", file);
-  formData.append("session", currentActiveSession);
 
   try {
     const detections = await apiRequest("/api/attendance/photo", {
@@ -273,14 +582,14 @@ btnRecognizePhoto.addEventListener("click", async () => {
       detections.forEach((d) => {
         const badge = document.createElement("div");
         badge.className = `result-badge ${d.name === "Unknown" ? "unknown" : "known"}`;
-        badge.innerHTML = `<span><strong>${d.name}</strong></span><span>${d.name === "Unknown" ? "Unenrolled" : "Marked Present"}</span>`;
+        badge.innerHTML = `<span><strong>${escapeHtml(d.name)}</strong></span><span>${d.name === "Unknown" ? "Not in this course" : "Marked Present"}</span>`;
         photoRecognitionResults.appendChild(badge);
       });
       showToast(`Recognized ${detections.length} face(s)`, "success");
-      loadAttendanceRecords();
+      loadCurrentSession();
     }
   } finally {
-    btnRecognizePhoto.disabled = false;
+    btnRecognizePhoto.disabled = currentSession === null;
   }
 });
 
@@ -411,8 +720,8 @@ async function loadAttendanceRecords() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${idx + 1}</td>
-        <td><strong>${r.student}</strong></td>
-        <td><span class="stat-pill" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">${r.session || "General"}</span></td>
+        <td><strong>${escapeHtml(r.student)}</strong></td>
+        <td><span class="stat-pill" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">${escapeHtml(r.session || "General")}</span></td>
         <td>${new Date(r.timestamp).toLocaleString()}</td>
       `;
       recordsTableBody.appendChild(tr);
@@ -449,9 +758,9 @@ async function loadStudentsRoster() {
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>#${s.student_id}</td>
-        <td><strong>${s.name}</strong></td>
+        <td><strong>${escapeHtml(s.name)}</strong></td>
         <td><span class="status-dot active"></span> Enrolled & Active</td>
-        <td><button class="btn btn-danger btn-delete-student" data-id="${s.student_id}" data-name="${s.name}" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;">Delete</button></td>
+        <td><button class="btn btn-danger btn-delete-student" data-id="${s.student_id}" data-name="${escapeHtml(s.name)}" style="padding: 0.25rem 0.6rem; font-size: 0.8rem;">Delete</button></td>
       `;
       rosterTableBody.appendChild(tr);
     });
@@ -466,6 +775,7 @@ async function loadStudentsRoster() {
             showToast(`Deleted '${studentName}' successfully`, "info");
             loadStudentsRoster();
             loadAttendanceRecords();
+            loadCourses();
           } catch (e) {}
         }
       });
@@ -483,7 +793,8 @@ btnRefreshRoster.addEventListener("click", () => {
 // ------------------------------------------------------------------ Initialization
 window.addEventListener("DOMContentLoaded", () => {
   loadSessions();
-  checkCameraStatus();
+  loadCourses();
+  loadCurrentSession().then(checkCameraStatus);
   loadStudentsRoster();
   loadAttendanceRecords();
 });

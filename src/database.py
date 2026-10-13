@@ -14,13 +14,17 @@
 #   create_course(code, name) -> int
 #   get_all_courses() -> list[tuple[int, str, str]]
 #   add_student_to_course(course_id, student_id) -> bool
+#   remove_student_from_course(course_id, student_id) -> bool
 #   get_course_students(course_id) -> list[tuple[int, str, bytes]]
 #   create_classroom(name, camera_source) -> int
 #   create_session(course_id, classroom_id) -> int
 #   close_session(session_id) -> bool
+#   close_all_open_sessions() -> int
 #   get_session(session_id) -> tuple | None
 #   log_session_attendance(session_id, student_id, confidence) -> bool
 #   get_session_attendance(session_id) -> list[tuple[int, str, str, float | None]]
+#   get_sessions(course_id) -> list[tuple[int, str, str, str, str | None, str, int, int]]
+#   get_session_results(session_id) -> list[tuple[int, str, bool, str | None, float | None]]
 #
 # Schema:
 #   students(student_id PK, name, face_encoding BLOB, university_id TEXT UNIQUE)
@@ -28,6 +32,7 @@
 #   course_students(course_id FK, student_id FK) PK(course_id, student_id)
 #   classrooms(classroom_id PK, name UNIQUE, camera_source)
 #   sessions(session_id PK, course_id FK, classroom_id FK, started_at, ended_at, status 'open'|'closed')
+#   session_students(session_id FK, student_id FK) PK(session_id, student_id)  -- roster at session start
 #   attendance(id PK, student_id FK, timestamp ISO datetime, session_name TEXT,
 #              session_id FK, confidence REAL)  UNIQUE(session_id, student_id)
 #
@@ -135,6 +140,33 @@ def init_db() -> None:
             """
         )
 
+        # Who was expected at each session, copied from the course roster when the session starts,
+        # so later roster changes don't rewrite who was absent from past lessons.
+        had_session_students = "session_students" in {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_students (
+                session_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL,
+                PRIMARY KEY (session_id, student_id),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+            )
+            """
+        )
+        if not had_session_students:
+            # Sessions recorded before this table existed: the current course roster is the best
+            # record of who was expected.
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO session_students (session_id, student_id)
+                SELECT sessions.session_id, course_students.student_id
+                FROM sessions JOIN course_students ON course_students.course_id = sessions.course_id
+                """
+            )
+
         # Migrations for databases created by earlier versions: add new columns in place so
         # existing students and attendance rows are kept.
         attendance_columns = _column_names(conn, "attendance")
@@ -176,6 +208,7 @@ def delete_student(student_id: int) -> bool:
     with _get_connection() as conn:
         conn.execute("DELETE FROM attendance WHERE student_id = ?", (student_id,))
         conn.execute("DELETE FROM course_students WHERE student_id = ?", (student_id,))
+        conn.execute("DELETE FROM session_students WHERE student_id = ?", (student_id,))
         cursor = conn.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
         return cursor.rowcount > 0
 
@@ -299,6 +332,16 @@ def add_student_to_course(course_id: int, student_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def remove_student_from_course(course_id: int, student_id: int) -> bool:
+    """Take a student off a course roster. Their past attendance records are kept."""
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM course_students WHERE course_id = ? AND student_id = ?",
+            (course_id, student_id),
+        )
+        return cursor.rowcount > 0
+
+
 def get_course_students(course_id: int) -> list[tuple[int, str, bytes]]:
     """Return the course roster as (student_id, name, face_encoding), the same shape as
     get_all_students(), so recognition can match faces against this course only.
@@ -346,7 +389,15 @@ def create_session(course_id: int, classroom_id: int | None = None) -> int:
             "INSERT INTO sessions (course_id, classroom_id, started_at, status) VALUES (?, ?, ?, 'open')",
             (course_id, classroom_id, datetime.now().isoformat()),
         )
-        return cursor.lastrowid
+        session_id = cursor.lastrowid
+        conn.execute(
+            """
+            INSERT INTO session_students (session_id, student_id)
+            SELECT ?, student_id FROM course_students WHERE course_id = ?
+            """,
+            (session_id, course_id),
+        )
+        return session_id
 
 
 def close_session(session_id: int) -> bool:
@@ -357,6 +408,18 @@ def close_session(session_id: int) -> bool:
             (datetime.now().isoformat(), session_id),
         )
         return cursor.rowcount > 0
+
+
+def close_all_open_sessions() -> int:
+    """Close every session still marked open, e.g. ones left behind when the server stopped
+    mid-lesson. Returns how many were closed.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE sessions SET status = 'closed', ended_at = ? WHERE status = 'open'",
+            (datetime.now().isoformat(),),
+        )
+        return cursor.rowcount
 
 
 def get_session(session_id: int) -> tuple[int, int, int | None, str, str | None, str] | None:
@@ -415,6 +478,50 @@ def get_session_attendance(session_id: int) -> list[tuple[int, str, str, float |
             (session_id,),
         )
         return cursor.fetchall()
+
+
+def get_sessions(course_id: int | None = None) -> list[tuple[int, str, str, str, str | None, str, int, int]]:
+    """Return past and running sessions, newest first, as
+    (session_id, course_code, course_name, started_at, ended_at, status, present_count, expected_count).
+    If course_id is given, only that course's sessions are returned.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT sessions.session_id, courses.code, courses.name, sessions.started_at,
+                   sessions.ended_at, sessions.status,
+                   (SELECT COUNT(*) FROM attendance WHERE attendance.session_id = sessions.session_id),
+                   (SELECT COUNT(*) FROM session_students WHERE session_students.session_id = sessions.session_id)
+            FROM sessions
+            JOIN courses ON courses.course_id = sessions.course_id
+            WHERE ? IS NULL OR sessions.course_id = ?
+            ORDER BY sessions.started_at DESC
+            """,
+            (course_id, course_id),
+        )
+        return cursor.fetchall()
+
+
+def get_session_results(session_id: int) -> list[tuple[int, str, bool, str | None, float | None]]:
+    """Return every student expected at a session, plus anyone marked present, as
+    (student_id, name, present, timestamp, confidence), ordered by name. Absent students have
+    present=False and no timestamp.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT students.student_id, students.name, attendance.id IS NOT NULL,
+                   attendance.timestamp, attendance.confidence
+            FROM students
+            LEFT JOIN attendance
+                   ON attendance.student_id = students.student_id AND attendance.session_id = ?
+            WHERE attendance.id IS NOT NULL
+               OR students.student_id IN (SELECT student_id FROM session_students WHERE session_id = ?)
+            ORDER BY students.name COLLATE NOCASE ASC
+            """,
+            (session_id, session_id),
+        )
+        return [(sid, name, bool(present), ts, conf) for sid, name, present, ts, conf in cursor.fetchall()]
 
 
 if __name__ == "__main__":

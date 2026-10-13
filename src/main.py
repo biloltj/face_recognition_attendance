@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import threading
+from typing import NamedTuple
 
 import cv2
 
@@ -18,12 +19,24 @@ import recognition
 CAPTURE_WIDTH = 1280
 CAPTURE_HEIGHT = 720
 
-# Recognition is the slow step in this pipeline. Instead of shrinking the frame aggressively to
-# keep it fast (which made distant/smaller faces too low-detail to recognize), recognition now
-# runs on its own background thread (see RecognitionWorker below) — so however long it takes, the
-# video display keeps updating at the camera's own framerate and never freezes. That lets us
-# afford a less aggressive resize for better accuracy.
-RECOGNITION_RESIZE_FACTOR = 0.5
+# Recognition is the slow step in this pipeline, but it runs on a background thread (see
+# RecognitionWorker below, and the session recognizer in webapp.py), so the video never waits for it.
+# That lets detection run on the full frame: the face detector can't find faces smaller than about
+# 40 px, and at 1280x720 a face 2 m from a typical webcam is only ~70 px — halving the frame (the
+# old 0.5 setting) shrank it to ~35 px, so anyone past about 1.5 m was never found at all.
+# Full resolution finds faces out to roughly 3.5 m, at ~0.65 s per pass on a laptop CPU.
+RECOGNITION_RESIZE_FACTOR = 1.0
+
+
+class Recognition(NamedTuple):
+    """One face found in a frame: who it is (student_id None if nobody matched), the label to
+    draw, where it is, and the match distance (lower = surer; None if no match).
+    """
+
+    student_id: int | None
+    label: str
+    location: tuple[int, int, int, int]
+    distance: float | None
 
 
 def draw_detections(frame, detections: list[tuple[str, tuple[int, int, int, int]]]) -> None:
@@ -37,32 +50,50 @@ def draw_detections(frame, detections: list[tuple[str, tuple[int, int, int, int]
         cv2.putText(frame, label, (left, max(top - 10, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
 
-def process_frame(
-    frame, students: list[tuple[int, str, bytes]], cnn_fallback: bool = False, session_name: str = "General"
-) -> list[tuple[str, tuple[int, int, int, int]]]:
-    """Look for every face in one frame and return (label, face_location) for each: the matched
-    student's name, or "Unknown" if a face was found but didn't match anyone. Returns an empty
-    list if no faces are found.
-
-    Also logs attendance for every matched student in the designated session.
+def recognize_frame(
+    frame, students: list[tuple[int, str, bytes]], cnn_fallback: bool = False
+) -> list[Recognition]:
+    """Find every face in one frame and match each against `students`, without logging anything.
+    Faces that match nobody come back with student_id None and the label "Unknown".
 
     `cnn_fallback` is passed through to recognition.get_all_face_encodings() — only for a single
     uploaded photo (see webapp.py), never in the live loop.
     """
+    names = {sid: name for sid, name, _ in students}
     results = []
     faces = recognition.get_all_face_encodings(
         frame, resize_factor=RECOGNITION_RESIZE_FACTOR, cnn_fallback=cnn_fallback
     )
     for encoding, location in faces:
-        student_id = recognition.match_face(encoding, students)
-        if student_id is None:
-            results.append(("Unknown", location))
-            continue
-
-        database.log_attendance(student_id, session_name=session_name)
-        name = next(name for sid, name, _ in students if sid == student_id)
-        results.append((name, location))
+        student_id, distance = recognition.match_face_with_distance(encoding, students)
+        label = "Unknown" if student_id is None else names[student_id]
+        results.append(Recognition(student_id, label, location, distance))
     return results
+
+
+def process_frame(
+    frame,
+    students: list[tuple[int, str, bytes]],
+    cnn_fallback: bool = False,
+    session_name: str = "General",
+    session_id: int | None = None,
+) -> list[tuple[str, tuple[int, int, int, int]]]:
+    """Recognize every face in one frame (see recognize_frame) and return (label, face_location)
+    for each. Returns an empty list if no faces are found.
+
+    Also logs attendance for every matched student straight away: into the course session
+    `session_id` when one is given (at most once per student per session, with the match distance
+    as confidence), otherwise into the legacy named `session_name`.
+    """
+    detections = recognize_frame(frame, students, cnn_fallback=cnn_fallback)
+    for d in detections:
+        if d.student_id is None:
+            continue
+        if session_id is not None:
+            database.log_session_attendance(session_id, d.student_id, d.distance)
+        else:
+            database.log_attendance(d.student_id, session_name=session_name)
+    return [(d.label, d.location) for d in detections]
 
 
 class RecognitionWorker:

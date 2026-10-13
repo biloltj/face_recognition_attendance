@@ -1,6 +1,6 @@
-```
+
 # Face Recognition Attendance System
-## Project Completion Plan: 7 October – 4 November 2026
+
 
 ## Current Status
 
@@ -104,4 +104,3 @@ Use a unique constraint on `(session_id, student_id)`.
 **How can the photos be obtained from the DII portal: an API, a database export, or only the web pages?**
 
 This decides the work planned for portal photo import and portal integration.
-```
