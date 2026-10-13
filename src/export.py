@@ -47,13 +47,14 @@ def export_session_csv(session_id: int, path: Path | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Student ID", "Student", "Status", "Time Marked", "Confidence"])
-        for student_id, name, present, timestamp, confidence in rows:
+        writer.writerow(["Student ID", "Student", "Status", "Time Marked", "Marked By", "Confidence"])
+        for student_id, name, present, timestamp, confidence, source in rows:
             writer.writerow([
                 student_id,
                 name,
                 "Present" if present else "Absent",
                 timestamp or "",
+                {"camera": "Camera", "manual": "Teacher"}.get(source, ""),
                 "" if confidence is None else f"{confidence:.3f}",
             ])
     return path

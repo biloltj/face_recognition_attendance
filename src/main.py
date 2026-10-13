@@ -51,18 +51,19 @@ def draw_detections(frame, detections: list[tuple[str, tuple[int, int, int, int]
 
 
 def recognize_frame(
-    frame, students: list[tuple[int, str, bytes]], cnn_fallback: bool = False
+    frame, students: list[tuple[int, str, bytes]], cnn_fallback: bool = False, pool=None
 ) -> list[Recognition]:
     """Find every face in one frame and match each against `students`, without logging anything.
     Faces that match nobody come back with student_id None and the label "Unknown".
 
     `cnn_fallback` is passed through to recognition.get_all_face_encodings() — only for a single
-    uploaded photo (see webapp.py), never in the live loop.
+    uploaded photo (see webapp.py), never in the live loop. `pool` (recognition.create_encoder_pool)
+    encodes several faces in parallel.
     """
     names = {sid: name for sid, name, _ in students}
     results = []
     faces = recognition.get_all_face_encodings(
-        frame, resize_factor=RECOGNITION_RESIZE_FACTOR, cnn_fallback=cnn_fallback
+        frame, resize_factor=RECOGNITION_RESIZE_FACTOR, cnn_fallback=cnn_fallback, pool=pool
     )
     for encoding, location in faces:
         student_id, distance = recognition.match_face_with_distance(encoding, students)
@@ -77,6 +78,7 @@ def process_frame(
     cnn_fallback: bool = False,
     session_name: str = "General",
     session_id: int | None = None,
+    pool=None,
 ) -> list[tuple[str, tuple[int, int, int, int]]]:
     """Recognize every face in one frame (see recognize_frame) and return (label, face_location)
     for each. Returns an empty list if no faces are found.
@@ -85,7 +87,7 @@ def process_frame(
     `session_id` when one is given (at most once per student per session, with the match distance
     as confidence), otherwise into the legacy named `session_name`.
     """
-    detections = recognize_frame(frame, students, cnn_fallback=cnn_fallback)
+    detections = recognize_frame(frame, students, cnn_fallback=cnn_fallback, pool=pool)
     for d in detections:
         if d.student_id is None:
             continue
@@ -151,8 +153,8 @@ class RecognitionWorker:
 
 def run() -> None:
     database.init_db()
-    students = database.get_all_students()
-    print(f"Loaded {len(students)} enrolled student(s). Press 'q' to quit.")
+    students = database.get_all_face_encodings()
+    print(f"Loaded {len({sid for sid, _, _ in students})} enrolled student(s). Press 'q' to quit.")
 
     worker = RecognitionWorker(students)
     try:

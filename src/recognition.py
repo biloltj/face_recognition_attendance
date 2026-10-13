@@ -11,6 +11,9 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import Executor, ProcessPoolExecutor
+
 import cv2
 import face_recognition
 import numpy as np
@@ -87,7 +90,8 @@ def get_face_encoding(
 
     `num_jitters` encodes the face that many times with small random shifts and averages the
     results. The stored reference then depends less on the exact framing of one photo, so live
-    matches are more consistent. 10 costs well under a second, so enrollment should use it.
+    matches are more consistent. Each jitter costs a full encoding (~0.4 s on a laptop CPU), so 10
+    takes about 4 s — fine for enrolling a student once, far too slow for live recognition.
 
     Returns None if no face is found in the image.
     """
@@ -113,8 +117,61 @@ def get_face_encoding(
     return encodings[0].astype(ENCODING_DTYPE).tobytes()
 
 
+def create_encoder_pool(workers: int | None = None) -> ProcessPoolExecutor:
+    """A pool of worker processes for get_all_face_encodings(pool=...).
+
+    Encoding a face takes ~0.45 s, and dlib doesn't let other Python threads run meanwhile, so a
+    frame with 30 faces would take ~14 s on one core. Separate processes do run in parallel
+    (measured 6.8x faster with 8 workers). Each worker loads the dlib models (~100 MB), so the
+    default stays well below the core count. The models load when each worker starts, so the first
+    pass is a little slower.
+    """
+    return ProcessPoolExecutor(max_workers=workers or default_encoder_workers())
+
+
+def default_encoder_workers() -> int:
+    """Half the CPU cores, at most 8: plenty of speed without loading the models too many times."""
+    return max(1, min(8, (os.cpu_count() or 2) // 2))
+
+
+def warm_up_encoder_pool(pool: ProcessPoolExecutor, workers: int) -> None:
+    """Start the workers and load the models in them now (without waiting), instead of during the
+    first recognition pass."""
+    for _ in range(workers):
+        pool.submit(_warm_up_worker)
+
+
+def _warm_up_worker() -> None:
+    """Runs in a worker; importing this module there has already loaded face_recognition's models."""
+
+
+# A crop around a face, with this much extra margin (relative to the face size) on each side, is
+# enough for dlib to find the landmarks it aligns the face with — and far less to send to a worker
+# process than the whole frame.
+_CROP_MARGIN = 0.6
+
+
+def _encode_face_crop(crop: np.ndarray, location: tuple[int, int, int, int]) -> np.ndarray:
+    """Worker-process side of the pool: encode the one face at `location` inside `crop` (RGB)."""
+    return face_recognition.face_encodings(crop, known_face_locations=[location])[0]
+
+
+def _encode_faces_in_parallel(
+    rgb: np.ndarray, locations: list[tuple[int, int, int, int]], pool: Executor
+) -> list[np.ndarray]:
+    height, width = rgb.shape[:2]
+    jobs = []
+    for top, right, bottom, left in locations:
+        margin = int(max(bottom - top, right - left) * _CROP_MARGIN)
+        y0, x0 = max(0, top - margin), max(0, left - margin)
+        y1, x1 = min(height, bottom + margin), min(width, right + margin)
+        crop = np.ascontiguousarray(rgb[y0:y1, x0:x1])
+        jobs.append(pool.submit(_encode_face_crop, crop, (top - y0, right - x0, bottom - y0, left - x0)))
+    return [job.result() for job in jobs]
+
+
 def get_all_face_encodings(
-    image: np.ndarray, resize_factor: float = 1.0, cnn_fallback: bool = False
+    image: np.ndarray, resize_factor: float = 1.0, cnn_fallback: bool = False, pool: Executor | None = None
 ) -> list[tuple[bytes, tuple[int, int, int, int]]]:
     """Like get_face_encoding, but finds and encodes every face in the image — for recognizing
     multiple students (e.g. a group, or a whole classroom) in a single frame.
@@ -131,6 +188,9 @@ def get_all_face_encodings(
 
     `cnn_fallback` works the same as in get_face_encoding — only use it for a single uploaded
     photo, never per-frame in a live loop.
+
+    `pool` (from create_encoder_pool) encodes the faces in parallel; without it they are encoded
+    one after another. The results are the same either way.
     """
     small_image = image
     if resize_factor != 1.0:
@@ -150,7 +210,10 @@ def get_all_face_encodings(
     ]
 
     original_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    encodings = face_recognition.face_encodings(original_rgb, known_face_locations=original_locations)
+    if pool is not None and len(original_locations) > 1:
+        encodings = _encode_faces_in_parallel(original_rgb, original_locations, pool)
+    else:
+        encodings = face_recognition.face_encodings(original_rgb, known_face_locations=original_locations)
 
     return [
         (encoding.astype(ENCODING_DTYPE).tobytes(), location)
@@ -185,7 +248,9 @@ def match_face_with_distance(
     match is too ambiguous — see below). The distance is saved with attendance as its confidence:
     lower means a surer match.
 
-    `known_students` is the list returned by database.get_all_students(): (student_id, name, encoding_bytes).
+    `known_students` is a list of (student_id, name, encoding_bytes), e.g. from
+    database.get_all_face_encodings(). A student may appear several times (one row per reference
+    photo): each student is scored by their closest photo, so extra photos only help.
 
     `tolerance` is the max "distance" allowed to count as a match — lower is stricter. The
     `face_recognition` library's own commonly-cited default is 0.6, but with only a small number of
@@ -207,20 +272,23 @@ def match_face_with_distance(
     # face_distance gives one number per known encoding: how far it is from the live one.
     # Lower means more similar, so the closest match is the smallest distance.
     distances = face_recognition.face_distance(known_encodings, live_encoding)
-    sorted_indices = np.argsort(distances)
-    best_index = int(sorted_indices[0])
 
-    best_distance = float(distances[best_index])
+    # Each student's score is their closest photo. Comparing per student (not per photo) matters for
+    # the margin check: two photos of the SAME student are naturally close to each other, and must
+    # not count as "two different people who look alike".
+    closest: dict[int, float] = {}
+    for (student_id, _, _), distance in zip(known_students, distances):
+        closest[student_id] = min(float(distance), closest.get(student_id, float("inf")))
+    ranked = sorted(closest.items(), key=lambda item: item[1])
+
+    best_student_id, best_distance = ranked[0]
     if best_distance > tolerance:
         return None, None
 
-    if len(distances) > 1:
-        second_best_distance = distances[sorted_indices[1]]
-        if second_best_distance - best_distance < min_margin:
-            return None, None
+    if len(ranked) > 1 and ranked[1][1] - best_distance < min_margin:
+        return None, None
 
-    student_id, _, _ = known_students[best_index]
-    return student_id, best_distance
+    return best_student_id, best_distance
 
 
 if __name__ == "__main__":

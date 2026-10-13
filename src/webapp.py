@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 import time
@@ -29,11 +30,12 @@ MAX_PHOTO_SIDE = 1600
 # A Take Attendance session records for this long, then the server closes it on its own.
 SESSION_DURATION_SECONDS = 10 * 60
 
-# Live sessions only mark a student present after this many matching recognition passes, each
-# within CONFIRM_WINDOW_SECONDS of the previous one — one stray wrong match can't mark anybody.
-# (A pass takes ~0.65 s, so a student standing in view is confirmed in about 1.5 s.)
+# Live sessions only mark a student present after matching them in this many recognition passes,
+# each no more than CONFIRM_WINDOW_PASSES passes after the previous match — one stray wrong match
+# can't mark anybody. The window counts passes, not seconds, because a pass gets longer the more
+# faces are in view: a time limit would stop a full classroom from ever being confirmed.
 CONFIRMATIONS_REQUIRED = 2
-CONFIRM_WINDOW_SECONDS = 10
+CONFIRM_WINDOW_PASSES = 3
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,8 @@ class ActiveSession:
     course_name: str
     started_at: str
     ends_at: datetime
-    roster: list[tuple[int, str, bytes]]
+    roster: list[tuple[int, str, bytes]]  # one row per student
+    encodings: list[tuple[int, str, bytes]]  # one row per reference photo, for matching
 
 
 class CameraManager:
@@ -174,14 +177,15 @@ class CameraManager:
 
         A single pass can occasionally put the wrong name on a face (bad angle, motion blur), so
         nobody is marked present from one pass alone: the same student must be matched again within
-        CONFIRM_WINDOW_SECONDS. Until then their box is labelled "Name?". The saved confidence is
-        the best (lowest) distance seen for them.
+        CONFIRM_WINDOW_PASSES passes. Until then their box is labelled "Name?". The saved confidence
+        is the best (lowest) distance seen for them.
         """
         matched_count: dict[int, int] = {}
-        last_matched: dict[int, float] = {}
+        last_matched_pass: dict[int, int] = {}
         best_distance: dict[int, float] = {}
         confirmed: set[int] = set()
         done_seq = -1
+        pass_number = 0
 
         while True:
             with self._lock:
@@ -193,18 +197,21 @@ class CameraManager:
                 continue
             done_seq = seq
 
-            detections = main.recognize_frame(frame, session.roster)
-            now = time.monotonic()
+            detections = main.recognize_frame(frame, session.encodings, pool=get_encoder_pool())
+            pass_number += 1
             labelled = []
             for d in detections:
                 if d.student_id is None:
                     labelled.append((d.label, d.location))
                     continue
                 sid = d.student_id
-                recent = now - last_matched.get(sid, -1e9) <= CONFIRM_WINDOW_SECONDS
-                matched_count[sid] = matched_count.get(sid, 0) + 1 if recent else 1
-                last_matched[sid] = now
                 best_distance[sid] = min(d.distance, best_distance.get(sid, d.distance))
+                # Count each student at most once per pass: two faces given the same name in one
+                # frame must not confirm them on their own.
+                if last_matched_pass.get(sid) != pass_number:
+                    recent = pass_number - last_matched_pass.get(sid, -10**9) <= CONFIRM_WINDOW_PASSES
+                    matched_count[sid] = matched_count.get(sid, 0) + 1 if recent else 1
+                    last_matched_pass[sid] = pass_number
 
                 if sid not in confirmed and matched_count[sid] >= CONFIRMATIONS_REQUIRED:
                     database.log_session_attendance(session.session_id, sid, best_distance[sid])
@@ -217,6 +224,20 @@ class CameraManager:
 
 
 camera_manager = CameraManager()
+
+# Worker processes that encode faces in parallel (see recognition.create_encoder_pool). Started
+# with the server so their models are loaded before the first session; created on first use
+# otherwise (e.g. in tests).
+_encoder_pool = None
+_encoder_pool_lock = threading.Lock()
+
+
+def get_encoder_pool():
+    global _encoder_pool
+    with _encoder_pool_lock:
+        if _encoder_pool is None:
+            _encoder_pool = recognition.create_encoder_pool()
+        return _encoder_pool
 
 # Held while a session is being started or stopped, so two clicks can't open two sessions at once.
 session_lock = threading.Lock()
@@ -422,7 +443,10 @@ def api_session_start():
         started_at = database.get_session(session_id)[3]
         ends_at = datetime.fromisoformat(started_at) + timedelta(seconds=SESSION_DURATION_SECONDS)
         camera_manager.begin_session(
-            ActiveSession(session_id, course_id, course[1], course[2], started_at, ends_at, roster)
+            ActiveSession(
+                session_id, course_id, course[1], course[2], started_at, ends_at, roster,
+                database.get_course_face_encodings(course_id),
+            )
         )
 
         # The timer runs on the server, so the session still ends on time if the browser is closed.
@@ -488,8 +512,9 @@ def api_session_results(session_id: int):
         "present_count": present_count,
         "absent_count": len(results) - present_count,
         "students": [
-            {"student_id": sid, "name": name, "present": present, "timestamp": ts, "confidence": conf}
-            for sid, name, present, ts, conf in results
+            {"student_id": sid, "name": name, "present": present, "timestamp": ts,
+             "confidence": conf, "source": source}
+            for sid, name, present, ts, conf, source in results
         ],
     })
 
@@ -587,7 +612,7 @@ def api_attendance_capture():
     if frame is None:
         return jsonify({"error": "Could not access the webcam."}), 503
 
-    detections = main.process_frame(frame, session.roster, session_id=session.session_id)
+    detections = main.process_frame(frame, session.encodings, session_id=session.session_id, pool=get_encoder_pool())
     return jsonify([{"name": name, "box": list(box), "session": session.course_code} for name, box in detections])
 
 
@@ -602,7 +627,9 @@ def api_attendance_photo():
     if image is None:
         return jsonify({"error": "Please choose a valid image file (JPG or PNG)."}), 400
 
-    detections = main.process_frame(image, session.roster, cnn_fallback=True, session_id=session.session_id)
+    detections = main.process_frame(
+        image, session.encodings, cnn_fallback=True, session_id=session.session_id, pool=get_encoder_pool()
+    )
     return jsonify([{"name": name, "box": list(box), "session": session.course_code} for name, box in detections])
 
 
@@ -630,6 +657,11 @@ def run() -> None:
     database.init_db()
     # The camera stops with the server, so any session still marked open is a leftover.
     database.close_all_open_sessions()
+    # Start the face-encoding workers now, so the first session doesn't wait for them to load.
+    # In debug mode Flask runs this script twice (a file watcher, then the real server with
+    # WERKZEUG_RUN_MAIN set); only the real server needs workers.
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        recognition.warm_up_encoder_pool(get_encoder_pool(), recognition.default_encoder_workers())
     app.run(debug=True)
 
 

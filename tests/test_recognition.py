@@ -61,6 +61,21 @@ class TestRecognition(unittest.TestCase):
 
         self.assertEqual(recognition.match_face_with_distance(self.encoding2.tobytes(), known_students[:1]), (None, None))
 
+    def test_several_photos_of_one_student_are_not_ambiguous(self):
+        """Two photos of the same student close to each other must not trip the margin guard."""
+        perturbation = np.zeros(128, dtype=np.float64)
+        perturbation[0] = 0.03
+        known_students = [
+            (1, "Alice", self.encoding1.tobytes()),
+            (1, "Alice", (self.encoding1 + perturbation).tobytes()),
+            (2, "Bob", self.encoding2.tobytes()),
+        ]
+        student_id, distance = recognition.match_face_with_distance(
+            (self.encoding1 + perturbation / 2).tobytes(), known_students
+        )
+        self.assertEqual(student_id, 1)
+        self.assertAlmostEqual(distance, 0.015, places=6)
+
     def test_ut2_reject_different_person(self):
         """UT-2: Comparing encodings from two different people (distance > tolerance) returns None."""
         known_students = [(1, "Alice", self.encoding1.tobytes())]

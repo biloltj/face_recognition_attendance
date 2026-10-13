@@ -5,6 +5,10 @@
 #   init_db() -> None
 #   save_student(name, encoding) -> int
 #   get_all_students() -> list[tuple[int, str, bytes]]
+#   get_all_face_encodings() -> list[tuple[int, str, bytes]]   (one row per reference photo)
+#   add_face_encoding(student_id, encoding, source, source_file) -> int
+#   is_source_file_imported(source_file) -> bool
+#   rename_student(student_id, name) -> bool
 #   delete_student(student_id) -> bool
 #   log_attendance(student_id, session_name) -> bool
 #   get_attendance_log(session_name) -> list[tuple[str, str, str]]
@@ -16,6 +20,7 @@
 #   add_student_to_course(course_id, student_id) -> bool
 #   remove_student_from_course(course_id, student_id) -> bool
 #   get_course_students(course_id) -> list[tuple[int, str, bytes]]
+#   get_course_face_encodings(course_id) -> list[tuple[int, str, bytes]]
 #   create_classroom(name, camera_source) -> int
 #   create_session(course_id, classroom_id) -> int
 #   close_session(session_id) -> bool
@@ -24,17 +29,22 @@
 #   log_session_attendance(session_id, student_id, confidence) -> bool
 #   get_session_attendance(session_id) -> list[tuple[int, str, str, float | None]]
 #   get_sessions(course_id) -> list[tuple[int, str, str, str, str | None, str, int, int]]
-#   get_session_results(session_id) -> list[tuple[int, str, bool, str | None, float | None]]
+#   get_session_results(session_id) -> list[tuple[int, str, bool, str | None, float | None, str | None]]
+#   set_attendance(session_id, student_id, present, reason) -> bool
+#   get_attendance_changes(session_id) -> list[tuple[str, str, str, str, str | None]]
 #
 # Schema:
 #   students(student_id PK, name, face_encoding BLOB, university_id TEXT UNIQUE)
+#   face_encodings(encoding_id PK, student_id FK, encoding BLOB, source, source_file UNIQUE, added_at)
 #   courses(course_id PK, code UNIQUE, name)
 #   course_students(course_id FK, student_id FK) PK(course_id, student_id)
 #   classrooms(classroom_id PK, name UNIQUE, camera_source)
 #   sessions(session_id PK, course_id FK, classroom_id FK, started_at, ended_at, status 'open'|'closed')
 #   session_students(session_id FK, student_id FK) PK(session_id, student_id)  -- roster at session start
 #   attendance(id PK, student_id FK, timestamp ISO datetime, session_name TEXT,
-#              session_id FK, confidence REAL)  UNIQUE(session_id, student_id)
+#              session_id FK, confidence REAL, source 'camera'|'manual')  UNIQUE(session_id, student_id)
+#   attendance_changes(change_id PK, session_id FK, student_id FK, old_status, new_status,
+#                      changed_at, reason)  -- audit trail of teacher overrides
 #
 # The legacy session_name column is kept so the current GUI/webapp keep working until
 # recognition.py is moved over to sessions (plan.md, Week 2). New code should use session_id.
@@ -176,6 +186,26 @@ def init_db() -> None:
             conn.execute("ALTER TABLE attendance ADD COLUMN session_id INTEGER REFERENCES sessions(session_id)")
         if "confidence" not in attendance_columns:
             conn.execute("ALTER TABLE attendance ADD COLUMN confidence REAL")
+        if "source" not in attendance_columns:
+            # 'camera' = recognized automatically, 'manual' = marked present by the teacher.
+            conn.execute("ALTER TABLE attendance ADD COLUMN source TEXT NOT NULL DEFAULT 'camera'")
+
+        # Audit trail for teacher overrides: every manual present/absent change, never edited.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attendance_changes (
+                change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                student_id INTEGER NOT NULL,
+                old_status TEXT NOT NULL CHECK (old_status IN ('present', 'absent')),
+                new_status TEXT NOT NULL CHECK (new_status IN ('present', 'absent')),
+                changed_at TEXT NOT NULL,
+                reason TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+                FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+            )
+            """
+        )
         if "university_id" not in _column_names(conn, "students"):
             # SQLite can't ADD COLUMN ... UNIQUE, so uniqueness comes from the index below.
             conn.execute("ALTER TABLE students ADD COLUMN university_id TEXT")
@@ -190,17 +220,82 @@ def init_db() -> None:
             "ON attendance(session_id, student_id) WHERE session_id IS NOT NULL"
         )
 
+        # Every reference face a student has (webcam enrollment, uploaded photo, portal photos).
+        # students.face_encoding stays as their first/primary one; recognition uses all of these.
+        had_face_encodings = "face_encodings" in {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS face_encodings (
+                encoding_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER NOT NULL,
+                encoding BLOB NOT NULL,
+                source TEXT NOT NULL,
+                source_file TEXT UNIQUE,
+                added_at TEXT NOT NULL,
+                FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+            )
+            """
+        )
+        if not had_face_encodings:
+            conn.execute(
+                """
+                INSERT INTO face_encodings (student_id, encoding, source, added_at)
+                SELECT student_id, face_encoding, 'enrollment', ? FROM students
+                """,
+                (datetime.now().isoformat(),),
+            )
 
-def save_student(name: str, encoding: bytes, university_id: str | None = None) -> int:
+
+def save_student(
+    name: str,
+    encoding: bytes,
+    university_id: str | None = None,
+    source: str = "enrollment",
+    source_file: str | None = None,
+) -> int:
     """Enroll a new student: store their name, face encoding and (optional) university ID from the
-    portal, return the new student_id. Raises sqlite3.IntegrityError if university_id is already used.
+    portal, return the new student_id. The encoding also becomes their first entry in face_encodings.
+    Raises sqlite3.IntegrityError if university_id or source_file is already used.
     """
     with _get_connection() as conn:
         cursor = conn.execute(
             "INSERT INTO students (name, face_encoding, university_id) VALUES (?, ?, ?)",
             (name, encoding, university_id),
         )
+        student_id = cursor.lastrowid
+        conn.execute(
+            "INSERT INTO face_encodings (student_id, encoding, source, source_file, added_at) VALUES (?, ?, ?, ?, ?)",
+            (student_id, encoding, source, source_file, datetime.now().isoformat()),
+        )
+        return student_id
+
+
+def add_face_encoding(student_id: int, encoding: bytes, source: str, source_file: str | None = None) -> int:
+    """Give a student another reference face (e.g. a second portal photo). Returns its encoding_id.
+    Raises sqlite3.IntegrityError if source_file was already imported or the student doesn't exist.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO face_encodings (student_id, encoding, source, source_file, added_at) VALUES (?, ?, ?, ?, ?)",
+            (student_id, encoding, source, source_file, datetime.now().isoformat()),
+        )
         return cursor.lastrowid
+
+
+def is_source_file_imported(source_file: str) -> bool:
+    """True if a face from this file is already stored, so re-running an import skips it."""
+    with _get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM face_encodings WHERE source_file = ?", (source_file,)).fetchone()
+        return row is not None
+
+
+def rename_student(student_id: int, name: str) -> bool:
+    """Change a student's display name (e.g. to their official portal name)."""
+    with _get_connection() as conn:
+        cursor = conn.execute("UPDATE students SET name = ? WHERE student_id = ?", (name, student_id))
+        return cursor.rowcount > 0
 
 
 def delete_student(student_id: int) -> bool:
@@ -209,6 +304,8 @@ def delete_student(student_id: int) -> bool:
         conn.execute("DELETE FROM attendance WHERE student_id = ?", (student_id,))
         conn.execute("DELETE FROM course_students WHERE student_id = ?", (student_id,))
         conn.execute("DELETE FROM session_students WHERE student_id = ?", (student_id,))
+        conn.execute("DELETE FROM attendance_changes WHERE student_id = ?", (student_id,))
+        conn.execute("DELETE FROM face_encodings WHERE student_id = ?", (student_id,))
         cursor = conn.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
         return cursor.rowcount > 0
 
@@ -219,6 +316,21 @@ def get_all_students() -> list[tuple[int, str, bytes]]:
     """
     with _get_connection() as conn:
         cursor = conn.execute("SELECT student_id, name, face_encoding FROM students ORDER BY student_id ASC")
+        return cursor.fetchall()
+
+
+def get_all_face_encodings() -> list[tuple[int, str, bytes]]:
+    """Return every reference face of every student as (student_id, name, encoding). A student
+    with several photos appears once per photo; recognition.match_face groups them by student.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT students.student_id, students.name, face_encodings.encoding
+            FROM face_encodings JOIN students ON students.student_id = face_encodings.student_id
+            ORDER BY face_encodings.student_id, face_encodings.encoding_id
+            """
+        )
         return cursor.fetchall()
 
 
@@ -354,6 +466,25 @@ def get_course_students(course_id: int) -> list[tuple[int, str, bytes]]:
             JOIN students ON students.student_id = course_students.student_id
             WHERE course_students.course_id = ?
             ORDER BY students.student_id ASC
+            """,
+            (course_id,),
+        )
+        return cursor.fetchall()
+
+
+def get_course_face_encodings(course_id: int) -> list[tuple[int, str, bytes]]:
+    """Like get_all_face_encodings(), but only for students in this course — what a session's
+    recognizer matches against.
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT students.student_id, students.name, face_encodings.encoding
+            FROM course_students
+            JOIN students ON students.student_id = course_students.student_id
+            JOIN face_encodings ON face_encodings.student_id = students.student_id
+            WHERE course_students.course_id = ?
+            ORDER BY face_encodings.student_id, face_encodings.encoding_id
             """,
             (course_id,),
         )
@@ -502,16 +633,16 @@ def get_sessions(course_id: int | None = None) -> list[tuple[int, str, str, str,
         return cursor.fetchall()
 
 
-def get_session_results(session_id: int) -> list[tuple[int, str, bool, str | None, float | None]]:
+def get_session_results(session_id: int) -> list[tuple[int, str, bool, str | None, float | None, str | None]]:
     """Return every student expected at a session, plus anyone marked present, as
-    (student_id, name, present, timestamp, confidence), ordered by name. Absent students have
-    present=False and no timestamp.
+    (student_id, name, present, timestamp, confidence, source), ordered by name. Absent students
+    have present=False and no timestamp or source; source is 'camera' or 'manual'.
     """
     with _get_connection() as conn:
         cursor = conn.execute(
             """
             SELECT students.student_id, students.name, attendance.id IS NOT NULL,
-                   attendance.timestamp, attendance.confidence
+                   attendance.timestamp, attendance.confidence, attendance.source
             FROM students
             LEFT JOIN attendance
                    ON attendance.student_id = students.student_id AND attendance.session_id = ?
@@ -521,7 +652,90 @@ def get_session_results(session_id: int) -> list[tuple[int, str, bool, str | Non
             """,
             (session_id, session_id),
         )
-        return [(sid, name, bool(present), ts, conf) for sid, name, present, ts, conf in cursor.fetchall()]
+        return [
+            (sid, name, bool(present), ts, conf, source)
+            for sid, name, present, ts, conf, source in cursor.fetchall()
+        ]
+
+
+def set_attendance(session_id: int, student_id: int, present: bool, reason: str | None = None) -> bool:
+    """Teacher override: mark a student present or absent in a finished session, and record the
+    change in attendance_changes. Returns False if the student already had that status.
+
+    Raises ValueError if the session doesn't exist or is still open (the camera could undo the
+    change), or if the student was neither expected at the session nor marked present in it.
+    """
+    with _get_connection() as conn:
+        session = conn.execute(
+            """
+            SELECT sessions.status, courses.code FROM sessions
+            JOIN courses ON courses.course_id = sessions.course_id
+            WHERE sessions.session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        if session[0] != "closed":
+            raise ValueError("Attendance can only be changed after the session has ended")
+
+        is_present = conn.execute(
+            "SELECT 1 FROM attendance WHERE session_id = ? AND student_id = ?", (session_id, student_id)
+        ).fetchone() is not None
+        expected = conn.execute(
+            "SELECT 1 FROM session_students WHERE session_id = ? AND student_id = ?", (session_id, student_id)
+        ).fetchone() is not None
+        if not expected and not is_present:
+            raise ValueError(f"Student {student_id} is not part of session {session_id}")
+        if is_present == present:
+            return False
+
+        now = datetime.now().isoformat()
+        if present:
+            conn.execute(
+                """
+                INSERT INTO attendance (student_id, timestamp, session_name, session_id, confidence, source)
+                VALUES (?, ?, ?, ?, NULL, 'manual')
+                """,
+                (student_id, now, session[1], session_id),
+            )
+        else:
+            conn.execute("DELETE FROM attendance WHERE session_id = ? AND student_id = ?", (session_id, student_id))
+
+        conn.execute(
+            """
+            INSERT INTO attendance_changes (session_id, student_id, old_status, new_status, changed_at, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                student_id,
+                "present" if is_present else "absent",
+                "present" if present else "absent",
+                now,
+                (reason or "").strip() or None,
+            ),
+        )
+        return True
+
+
+def get_attendance_changes(session_id: int) -> list[tuple[str, str, str, str, str | None]]:
+    """Return the teacher's changes to a session, oldest first, as
+    (student_name, old_status, new_status, changed_at, reason).
+    """
+    with _get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT students.name, attendance_changes.old_status, attendance_changes.new_status,
+                   attendance_changes.changed_at, attendance_changes.reason
+            FROM attendance_changes
+            JOIN students ON students.student_id = attendance_changes.student_id
+            WHERE attendance_changes.session_id = ?
+            ORDER BY attendance_changes.change_id ASC
+            """,
+            (session_id,),
+        )
+        return cursor.fetchall()
 
 
 if __name__ == "__main__":

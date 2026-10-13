@@ -225,6 +225,27 @@ class TestCoursesAndSessions(unittest.TestCase):
         self.assertTrue(database.delete_student(self.alice))
         self.assertEqual(database.get_session_results(session_id), [])
 
+    def test_students_can_have_several_reference_faces(self):
+        database.add_face_encoding(self.alice, b"enc-a2", "portal", "portal:Alice(1).jpg")
+        self.assertTrue(database.is_source_file_imported("portal:Alice(1).jpg"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            database.add_face_encoding(self.alice, b"enc-a3", "portal", "portal:Alice(1).jpg")
+
+        self.assertEqual(
+            database.get_all_face_encodings(),
+            [(self.alice, "Alice", b"enc-a"), (self.alice, "Alice", b"enc-a2"), (self.bob, "Bob", b"enc-b")],
+        )
+        # Only Alice is in the course, but both of her photos are used for matching.
+        self.assertEqual(len(database.get_course_face_encodings(self.course_id)), 2)
+        self.assertEqual(len(database.get_course_students(self.course_id)), 1)
+
+        database.delete_student(self.alice)
+        self.assertEqual(database.get_all_face_encodings(), [(self.bob, "Bob", b"enc-b")])
+
+    def test_rename_student(self):
+        self.assertTrue(database.rename_student(self.alice, "Smith Alice"))
+        self.assertEqual(database.get_all_face_encodings()[0][1], "Smith Alice")
+
     def test_delete_student_removes_enrollments(self):
         database.delete_student(self.alice)
         self.assertEqual(database.get_course_students(self.course_id), [])
@@ -262,6 +283,8 @@ class TestMigration(unittest.TestCase):
                 self.assertIn("session_id", attendance_columns)
                 self.assertIn("confidence", attendance_columns)
                 self.assertIn("university_id", student_columns)
+                # The one enrollment face becomes the student's first reference face.
+                self.assertEqual(database.get_all_face_encodings(), [(1, "Old", b"\x00")])
             finally:
                 database.DB_PATH = original_db_path
 

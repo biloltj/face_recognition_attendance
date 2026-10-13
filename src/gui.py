@@ -222,7 +222,7 @@ class App(tk.Tk):
             messagebox.showerror("Camera busy", "Stop the camera on 'Enroll Student' first — only one tab can use the webcam.")
             return
 
-        students = database.get_all_students()
+        students = database.get_all_face_encodings()
         self._frame_source = recognition.frames_from_webcam(width=main.CAPTURE_WIDTH, height=main.CAPTURE_HEIGHT)
         self._worker = main.RecognitionWorker(students)
         self._start_button.state(["disabled"])

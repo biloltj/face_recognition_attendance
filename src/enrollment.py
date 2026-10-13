@@ -81,7 +81,7 @@ def enroll_student(name: str) -> EnrollmentResult:
         return EnrollmentResult(None, error)
 
     database.init_db()
-    students = database.get_all_students()
+    students = database.get_all_face_encodings()
 
     for attempt in range(1, MAX_CAPTURE_ATTEMPTS + 1):
         frame = recognition.capture_frame_from_webcam()
@@ -128,7 +128,7 @@ def enroll_from_frame(name: str, frame, cnn_fallback: bool = False) -> Enrollmen
         print(message)
         return EnrollmentResult(None, message)
 
-    students = database.get_all_students()
+    students = database.get_all_face_encodings()
     return _finish_enrollment(name, encoding, students)
 
 
